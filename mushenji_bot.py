@@ -3,6 +3,7 @@ import re
 import time
 import random
 import asyncio
+import math
 from dataclasses import dataclass
 from typing import Optional, Tuple, Dict
 
@@ -78,7 +79,7 @@ DAOHAO_SUFFIX = [
 ]
 
 REALM_TIERS = ["灵胎", "五曜", "六合", "七星", "天人","生死","神桥"]  # MVP占位
-STAGES_PER_TIER = 10
+STAGES_PER_TIER = 3
 
 
 # ----------------------------
@@ -203,32 +204,52 @@ def gen_daohao() -> str:
     return random.choice(DAOHAO_PREFIX) + random.choice(DAOHAO_SUFFIX)
 
 
-def stage_to_phase(stage: int) -> str:
-    # 1-3 前期，4-7 中期，8-10 后期
-    # 想更平均也可以改成 1-3 / 4-6 / 7-10
-    if stage <= 3:
-        return "前期"
-    if stage <= 7:
-        return "中期"
-    return "后期"
+PHASE_CAP_BASE = {1: 500, 2: 1500, 3: 3000}
+TIER_GROWTH = 8  # 必须 >6，保证“上一境界后期 < 下一境界前期”
 
-def phase_progress(stage: int) -> tuple[int, int]:
-    # 返回 (当前小段进度, 该段总进度)，用于可选显示，例如：前期(2/3)
-    if stage <= 3:
-        return stage, 3
-    if stage <= 7:
-        return stage - 3, 4
-    return stage - 7, 3
+def stage_to_phase(stage: int) -> str:
+    return "前期" if stage == 1 else ("中期" if stage == 2 else "后期")
+
+def phase_cap(tier: int, stage: int) -> int:
+    return PHASE_CAP_BASE[stage] * (TIER_GROWTH ** tier)
+
+def tier_total(tier: int) -> int:
+    return sum(PHASE_CAP_BASE[s] for s in (1, 2, 3)) * (TIER_GROWTH ** tier)
+
+def tier_offset(tier: int) -> int:
+    # 之前所有境界的总需求，用于全局累计 exp
+    return sum(tier_total(i) for i in range(tier))
+
+def phase_start_total(tier: int, stage: int) -> int:
+    # 当前阶段在“全局累计 exp”中的起点
+    off = tier_offset(tier)
+    if stage == 1:
+        return off
+    if stage == 2:
+        return off + phase_cap(tier, 1)
+    return off + phase_cap(tier, 1) + phase_cap(tier, 2)
+
+def exp_view_in_phase(exp_total: int, tier: int, stage: int) -> tuple[int, int]:
+    # 返回 (阶段内当前显示值, 阶段内上限)
+    start = phase_start_total(tier, stage)
+    cap = phase_cap(tier, stage)
+    return max(0, exp_total - start), cap
+
 
 def realm_name(tier: int, stage: int) -> str:
     tier = max(0, min(tier, len(REALM_TIERS) - 1))
     stage = max(1, min(stage, STAGES_PER_TIER))
     return f"{REALM_TIERS[tier]}{stage_to_phase(stage)}"
 
-
 def stage_threshold(tier: int, stage: int) -> int:
-    # 占位的晋级阈值：后续可按模板替换为更精确的境界壁垒
-    return (tier + 1) * stage * 200
+    """
+    返回“推进到下一阶段所需的全局累计修为阈值”
+    stage=1：达到前期满 -> 进入中期
+    stage=2：达到中期满 -> 进入后期
+    stage=3：达到后期满 -> 进入下一境界前期
+    """
+    stage = max(1, min(stage, STAGES_PER_TIER))
+    return phase_start_total(tier, stage) + phase_cap(tier, stage)
 
 
 async def maybe_rank_up(user_id: int):
@@ -359,8 +380,18 @@ async def do_train(user_id: int) -> str:
     await set_player_field(user_id, train_ready_ts=now + cd)
 
     p2 = await get_player(user_id)
-    return f"{extra}\n本次修为变化：{delta:+d}\n当前境界：{realm_name(p2[4], p2[5])}\n下次可闭关：{cd//60}–{cd//60 + (1 if cd%60 else 0)} 分钟后。"
+tier2, stage2, exp2 = p2[4], p2[5], p2[6]
 
+cur_in_phase, cap_in_phase = exp_view_in_phase(exp2, tier2, stage2)
+mins = (cd + 59) // 60
+
+return (
+    f"{extra}\n"
+    f"本次修为变化：{delta:+d}\n"
+    f"当前境界：{realm_name(tier2, stage2)}\n"
+    f"当前修为：{cur_in_phase}/{cap_in_phase}\n"
+    f"你感到一阵疲惫，需要打坐调息{mins}分钟方可再次闭关。"
+)
 
 async def start_deep(user_id: int) -> str:
     p = await get_player(user_id)
@@ -370,7 +401,7 @@ async def start_deep(user_id: int) -> str:
     if p[9] == 1:
         return "你正在深度闭关中，可发送 .查看闭关 查看剩余时间。"
     if now < p[12]:
-        left = p[14] - now
+        left = p[12] - now
         return f"今日机缘已尽，尚需 {left//3600}小时{(left%3600)//60}分钟 才可再次深度闭关。"
 
     await set_player_field(
@@ -535,10 +566,12 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         p = await get_player(user_id)
         if not p:
             return "你尚未入道，请先发送 .检测灵体。"
+        cur_in_phase, cap_in_phase = exp_view_in_phase(p[6], p[4], p[5])
         return (
             f"道友：{p[1]}\n道号：{p[2]}\n灵体：{p[3]}\n"
-            f"境界：{realm_name(p[4], p[5])}\n修为：{p[6]}\n灵石：{p[7]}\n"
+            f"境界：{realm_name(p[4], p[5])}\n当前修为：{cur_in_phase}/{cap_in_phase}\n灵石：{p[7]}\n"
         )
+
 
     if cmd == "闭关修炼":
         return await do_train(user_id)
@@ -655,3 +688,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
