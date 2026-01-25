@@ -17,6 +17,11 @@ from aiogram.types import Message
 # ----------------------------
 DB_PATH = "data/mushenji.sqlite3"
 PREFIX = "."
+ADMIN_USER_IDS = {
+    int(uid)
+    for uid in os.getenv("ADMIN_USER_IDS", "").split(",")
+    if uid.strip().isdigit()
+}
 
 # 闭关冷却：10-15分钟（规格书）
 TRAIN_CD_MIN = 10 * 60
@@ -313,6 +318,27 @@ def parse_item_qty(spec: str) -> Tuple[str, int]:
     return s, 1
 
 
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_USER_IDS
+
+
+def parse_admin_args(text: str) -> Tuple[str, str]:
+    if not text:
+        return "", ""
+    parts = text.strip().split(maxsplit=1)
+    action = parts[0] if parts else ""
+    rest = parts[1] if len(parts) > 1 else ""
+    return action, rest
+
+
+def parse_user_id(value: str) -> Optional[int]:
+    if not value:
+        return None
+    if value.isdigit():
+        return int(value)
+    return None
+
+
 def apply_toxicity_effect(toxic_points: int) -> Tuple[float, float]:
     """
     返回 (收益倍率, 成功率修正) —— 只是MVP默认值，你后续可按模板细化
@@ -380,18 +406,18 @@ async def do_train(user_id: int) -> str:
     await set_player_field(user_id, train_ready_ts=now + cd)
 
     p2 = await get_player(user_id)
-tier2, stage2, exp2 = p2[4], p2[5], p2[6]
+    tier2, stage2, exp2 = p2[4], p2[5], p2[6]
 
-cur_in_phase, cap_in_phase = exp_view_in_phase(exp2, tier2, stage2)
-mins = (cd + 59) // 60
+    cur_in_phase, cap_in_phase = exp_view_in_phase(exp2, tier2, stage2)
+    mins = (cd + 59) // 60
 
-return (
-    f"{extra}\n"
-    f"本次修为变化：{delta:+d}\n"
-    f"当前境界：{realm_name(tier2, stage2)}\n"
-    f"当前修为：{cur_in_phase}/{cap_in_phase}\n"
-    f"你感到一阵疲惫，需要打坐调息{mins}分钟方可再次闭关。"
-)
+    return (
+        f"{extra}\n"
+        f"本次修为变化：{delta:+d}\n"
+        f"当前境界：{realm_name(tier2, stage2)}\n"
+        f"当前修为：{cur_in_phase}/{cap_in_phase}\n"
+        f"你感到一阵疲惫，需要打坐调息{mins}分钟方可再次闭关。"
+    )
 
 async def start_deep(user_id: int) -> str:
     p = await get_player(user_id)
@@ -542,6 +568,124 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
     user_id = msg.from_user.id
     nick = msg.from_user.full_name or "道友"
 
+    if cmd == "天":
+        if not is_admin(user_id):
+            return "此指令仅天道可用。"
+
+        action, args = parse_admin_args(rest)
+        if not action or action == "帮助":
+            return (
+                "天道指令：\n"
+                ".天 查档 用户ID\n"
+                ".天 设置修为 用户ID 修为值\n"
+                ".天 境界 用户ID 境界序号 阶段(1-3)\n"
+                ".天 发放 用户ID 物品名 数量\n"
+                ".天 清丹毒 用户ID\n"
+                ".天 重置闭关 用户ID\n"
+            )
+
+        if action == "查档":
+            target_id = parse_user_id(args.strip())
+            if target_id is None:
+                return "用法：.天 查档 用户ID"
+            p = await get_player(target_id)
+            if not p:
+                return "目标尚未入道。"
+            cur_in_phase, cap_in_phase = exp_view_in_phase(p[6], p[4], p[5])
+            return (
+                f"道友：{p[1]}\n道号：{p[2]}\n灵体：{p[3]}\n"
+                f"境界：{realm_name(p[4], p[5])}\n当前修为：{cur_in_phase}/{cap_in_phase}\n"
+                f"灵石：{p[7]}\n丹毒层数：{p[14]}"
+            )
+
+        if action == "设置修为":
+            parts = args.split()
+            if len(parts) != 2:
+                return "用法：.天 设置修为 用户ID 修为值"
+            target_id = parse_user_id(parts[0])
+            if target_id is None:
+                return "用户ID无效。"
+            try:
+                exp_value = int(parts[1])
+            except ValueError:
+                return "修为值必须是整数。"
+            p = await get_player(target_id)
+            if not p:
+                return "目标尚未入道。"
+            await set_player_field(target_id, exp=max(0, exp_value))
+            await maybe_rank_up(target_id)
+            return "已调整修为。"
+
+        if action == "境界":
+            parts = args.split()
+            if len(parts) != 3:
+                return "用法：.天 境界 用户ID 境界序号 阶段(1-3)"
+            target_id = parse_user_id(parts[0])
+            if target_id is None:
+                return "用户ID无效。"
+            try:
+                tier = int(parts[1])
+                stage = int(parts[2])
+            except ValueError:
+                return "境界序号与阶段必须是整数。"
+            tier = max(0, min(tier, len(REALM_TIERS) - 1))
+            stage = max(1, min(stage, STAGES_PER_TIER))
+            p = await get_player(target_id)
+            if not p:
+                return "目标尚未入道。"
+            await set_player_field(target_id, tier=tier, stage=stage)
+            return f"已调整境界为：{realm_name(tier, stage)}"
+
+        if action == "发放":
+            parts = args.split()
+            if len(parts) < 3:
+                return "用法：.天 发放 用户ID 物品名 数量"
+            target_id = parse_user_id(parts[0])
+            if target_id is None:
+                return "用户ID无效。"
+            try:
+                qty = int(parts[-1])
+            except ValueError:
+                return "数量必须是整数。"
+            item = " ".join(parts[1:-1]).strip()
+            if not item:
+                return "物品名不能为空。"
+            p = await get_player(target_id)
+            if not p:
+                return "目标尚未入道。"
+            await inv_add(target_id, item, qty)
+            return f"已发放 {item} × {qty}。"
+
+        if action == "清丹毒":
+            target_id = parse_user_id(args.strip())
+            if target_id is None:
+                return "用法：.天 清丹毒 用户ID"
+            p = await get_player(target_id)
+            if not p:
+                return "目标尚未入道。"
+            await set_player_field(target_id, toxic_points=0, last_pill_name="", last_pill_ts=0)
+            return "已清除丹毒。"
+
+        if action == "重置闭关":
+            target_id = parse_user_id(args.strip())
+            if target_id is None:
+                return "用法：.天 重置闭关 用户ID"
+            p = await get_player(target_id)
+            if not p:
+                return "目标尚未入道。"
+            await set_player_field(
+                target_id,
+                train_ready_ts=0,
+                deep_active=0,
+                deep_start_ts=0,
+                deep_end_ts=0,
+                deep_next_ts=0,
+                passive_ready_ts=0,
+            )
+            return "已重置闭关与冷却。"
+
+        return "未知天道指令。发送 .天 帮助 查看可用指令。"
+
     if cmd == "帮助":
         return (
             "基础指令（全部以 . 开头）：\n"
@@ -551,6 +695,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
             ".深度闭关 / .查看闭关 / .强行出关\n"
             ".储物袋\n"
             ".服用 丹药名*数量\n"
+            ".天 帮助（管理员）\n"
         )
 
     if cmd == "检测灵体":
