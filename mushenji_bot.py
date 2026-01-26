@@ -39,16 +39,30 @@ PASSIVE_GAIN = 1
 # 一些基础丹药（用于MVP测试；后续你可以完全换成模板里的物品体系）
 PILLS: Dict[str, dict] = {
     "聚气丹": {"exp": 120, "min_tier": 0, "min_stage": 1},
-    "清灵丹": {"exp": 0, "min_tier": 0, "min_stage": 1, "clear_toxic": True},
+    "培元丹": {"exp": 90, "min_tier": 0, "min_stage": 1},
+    "洗髓丹": {"exp": 0, "min_tier": 0, "min_stage": 1, "clear_toxic": True},
+    "金髓丹": {"exp": 260, "min_tier": 0, "min_stage": 2},
+    "玄灵丹": {"exp": 420, "min_tier": 1, "min_stage": 1},
 }
 
 # 灵体示例（后续你可以按模板更细化）
 LINGTI_POOL = [
-    ("青龙灵体", 24.9),
-    ("朱雀灵体", 24.9),
-    ("白虎灵体", 24.9),
-    ("玄武灵体", 24.9),
-    ("霸体", 0.4),
+    ("青龙灵体", 21.5),
+    ("朱雀灵体", 21.5),
+    ("白虎灵体", 21.5),
+    ("玄武灵体", 21.5),
+    ("日耀灵体", 6.0),
+    ("月华灵体", 6.0),
+    ("霸体", 1.5),
+    ("剑心通明", 0.5),
+]
+
+LORE_LINES = [
+    "大墟风沙如海，残老村的灯火却从未熄灭。",
+    "延康皇朝方兴未艾，世间诸教暗流涌动。",
+    "天圣教传言再起，旧日遗迹被人踏破封印。",
+    "有人在太虚深处见到神桥残影，疑是上古遗泽。",
+    "古神低语回荡在黑暗中，谁也说不清是福是祸。",
 ]
 
 DAOHAO_PREFIX = [
@@ -146,7 +160,7 @@ async def create_player(user_id: int, nick: str, daohao: str, lingti: str):
         )
         # 初始发一点丹药用于测试
         await db.execute("INSERT OR IGNORE INTO inv(user_id,item,qty) VALUES(?,?,?)", (user_id, "聚气丹", 3))
-        await db.execute("INSERT OR IGNORE INTO inv(user_id,item,qty) VALUES(?,?,?)", (user_id, "清灵丹", 1))
+        await db.execute("INSERT OR IGNORE INTO inv(user_id,item,qty) VALUES(?,?,?)", (user_id, "洗髓丹", 1))
         await db.commit()
 
 
@@ -387,7 +401,7 @@ async def do_train(user_id: int) -> str:
     else:
         # 成功：大收益
         delta = base
-        extra = "吐纳有成，灵气入体！"
+        extra = "吐纳有成，灵气入体！大墟灵气回涌，周身一暖。"
         # 奇遇（模板描述“有几率触发奇遇”）
         if random.random() < 0.08:
             bonus = random.randint(30, 120)
@@ -437,7 +451,7 @@ async def start_deep(user_id: int) -> str:
         deep_end_ts=now + DEEP_DURATION,
         deep_next_ts=now + DEEP_COOLDOWN,
     )
-    return "已开启【深度闭关】（8小时）。结束后，下次发言/指令将自动结算。"
+    return "已开启【深度闭关】（8小时）。结束后，下次发言/指令将自动结算。大墟风沙隔绝尘世。"
 
 
 async def deep_status(user_id: int) -> str:
@@ -695,6 +709,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
             ".深度闭关 / .查看闭关 / .强行出关\n"
             ".储物袋\n"
             ".服用 丹药名*数量\n"
+            ".传闻\n"
             ".天 帮助（管理员）\n"
         )
 
@@ -705,7 +720,13 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         daohao = gen_daohao()
         lingti = weighted_choice(LINGTI_POOL)
         await create_player(user_id, nick, daohao, lingti)
-        return f"天机显化：道友\n先天灵体：{lingti}\n已入仙途：{realm_name(0,1)}\n可发送 .闭关修炼 开始修行。"
+        return (
+            f"天机显化：道友\n"
+            f"先天灵体：{lingti}\n"
+            f"已入仙途：{realm_name(0,1)}\n"
+            "身处大墟，万象皆险。\n"
+            "可发送 .闭关修炼 开始修行。"
+        )
 
     if cmd == "我的灵体":
         p = await get_player(user_id)
@@ -743,6 +764,9 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
                 lines.append(f"- {it} × {qty}")
         return "\n".join(lines)
 
+    if cmd == "传闻":
+        return random.choice(LORE_LINES)
+
     if cmd == "服用":
         p = await get_player(user_id)
         if not p:
@@ -758,7 +782,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
 
         pill = PILLS.get(name)
         if not pill:
-            return f"未知丹药：{name}（MVP仅内置：{', '.join(PILLS.keys())}）"
+            return f"未知丹药：{name}（延康丹房仅内置：{', '.join(PILLS.keys())}）"
 
         tier, stage = p[4], p[5]
         if (tier < pill["min_tier"]) or (tier == pill["min_tier"] and stage < pill["min_stage"]):
@@ -774,7 +798,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
 
         if pill.get("clear_toxic"):
             await set_player_field(user_id, toxic_points=0, last_pill_name="", last_pill_ts=0)
-            return "清灵丹入腹，丹毒尽消，道心澄明。"
+            return "洗髓丹入腹，丹毒尽消，道心澄明。"
 
         # 同类丹药24小时内连续服用→丹毒累积（模板描述）
         if last_name == name and (now - last_ts) <= 24 * 60 * 60:
