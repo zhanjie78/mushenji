@@ -934,8 +934,8 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
 async def main():
 
     token = os.getenv("TELEGRAM_BOT_TOKEN")
-        if not token:
-            raise RuntimeError("缺少 TELEGRAM_BOT_TOKEN")
+    if not token:
+        raise RuntimeError("缺少 TELEGRAM_BOT_TOKEN")
     
     await db_init()
 
@@ -967,5 +967,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
