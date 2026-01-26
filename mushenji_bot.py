@@ -57,13 +57,33 @@ LINGTI_POOL = [
     ("剑心通明", 0.5),
 ]
 
-LORE_LINES = [
-    "大墟风沙如海，残老村的灯火却从未熄灭。",
-    "延康皇朝方兴未艾，世间诸教暗流涌动。",
-    "天圣教传言再起，旧日遗迹被人踏破封印。",
-    "有人在太虚深处见到神桥残影，疑是上古遗泽。",
-    "古神低语回荡在黑暗中，谁也说不清是福是祸。",
-]
+LORE = {
+    "世界观": [
+        "大墟风沙如海，残老村的灯火却从未熄灭。",
+        "延康皇朝方兴未艾，世间诸教暗流涌动。",
+        "古神低语回荡在黑暗中，谁也说不清是福是祸。",
+        "太虚深处偶现神桥残影，疑是上古遗泽。",
+    ],
+    "人物": [
+        "有游侠踏入大墟，誓要解开古神之谜。",
+        "有人自称来自延康，口口声声要重塑旧日秩序。",
+    ],
+    "势力": [
+        "延康皇朝",
+        "天圣教",
+        "残老村",
+    ],
+    "地名": [
+        "大墟",
+        "太虚",
+        "延康",
+    ],
+    "传闻": [
+        "旧日遗迹重现，传闻有神兵出世。",
+        "黑暗中传来钟声，似在召唤沉睡的古神。",
+        "有人在风沙中见到不该存在的城池。",
+    ],
+}
 
 DAOHAO_PREFIX = [
     "赵", "钱", "孙", "李", "周", "吴", "郑", "王",
@@ -351,6 +371,20 @@ def parse_user_id(value: str) -> Optional[int]:
     if value.isdigit():
         return int(value)
     return None
+
+
+def lore_pick(category: str) -> Optional[str]:
+    lines = LORE.get(category, [])
+    if not lines:
+        return None
+    return random.choice(lines)
+
+
+def lore_list(category: str) -> Optional[str]:
+    lines = LORE.get(category, [])
+    if not lines:
+        return None
+    return "、".join(lines)
 
 
 def apply_toxicity_effect(toxic_points: int) -> Tuple[float, float]:
@@ -710,6 +744,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
             ".储物袋\n"
             ".服用 丹药名*数量\n"
             ".传闻\n"
+            ".世界观 / .人物 / .势力 / .地名\n"
             ".天 帮助（管理员）\n"
         )
 
@@ -765,7 +800,19 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         return "\n".join(lines)
 
     if cmd == "传闻":
-        return random.choice(LORE_LINES)
+        return lore_pick("传闻") or "暂无传闻。"
+
+    if cmd == "世界观":
+        return lore_pick("世界观") or "暂无世界观条目。"
+
+    if cmd == "人物":
+        return lore_pick("人物") or "暂无人物条目。"
+
+    if cmd == "势力":
+        return lore_list("势力") or "暂无势力条目。"
+
+    if cmd == "地名":
+        return lore_list("地名") or "暂无地名条目。"
 
     if cmd == "服用":
         p = await get_player(user_id)
