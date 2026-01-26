@@ -4,6 +4,7 @@ import time
 import random
 import asyncio
 import math
+import html
 from dataclasses import dataclass
 from typing import Optional, Tuple, Dict
 
@@ -387,6 +388,16 @@ def lore_list(category: str) -> Optional[str]:
     return "、".join(lines)
 
 
+def format_block(title: str, body_lines: list[str], footer_lines: Optional[list[str]] = None) -> str:
+    lines = [f"【<b>{html.escape(title)}</b>】"]
+    if body_lines:
+        lines.extend(html.escape(line) for line in body_lines)
+    if footer_lines:
+        lines.append("")
+        lines.extend(html.escape(line) for line in footer_lines)
+    return "\n".join(lines)
+
+
 def apply_toxicity_effect(toxic_points: int) -> Tuple[float, float]:
     """
     返回 (收益倍率, 成功率修正) —— 只是MVP默认值，你后续可按模板细化
@@ -459,13 +470,17 @@ async def do_train(user_id: int) -> str:
     cur_in_phase, cap_in_phase = exp_view_in_phase(exp2, tier2, stage2)
     mins = (cd + 59) // 60
 
-    return (
-        f"{extra}\n"
-        f"本次修为变化：{delta:+d}\n"
-        f"当前境界：{realm_name(tier2, stage2)}\n"
-        f"当前修为：{cur_in_phase}/{cap_in_phase}\n"
-        f"你感到一阵疲惫，需要打坐调息{mins}分钟方可再次闭关。"
-    )
+    detail_lines = ["结果："]
+    for line in extra.splitlines():
+        detail_lines.append(f"- {line}")
+    if len(detail_lines) == 1:
+        detail_lines.append("- 平淡无奇。")
+    detail_lines.append(f"- 修为变化：{delta:+d}")
+    detail_lines.append(f"- 当前境界：{realm_name(tier2, stage2)}")
+    detail_lines.append(f"- 当前修为：{cur_in_phase}/{cap_in_phase}")
+
+    footer_lines = [f"调息：{mins}分钟后可再次闭关。"]
+    return format_block("闭关修炼", detail_lines, footer_lines)
 
 async def start_deep(user_id: int) -> str:
     p = await get_player(user_id)
@@ -485,7 +500,14 @@ async def start_deep(user_id: int) -> str:
         deep_end_ts=now + DEEP_DURATION,
         deep_next_ts=now + DEEP_COOLDOWN,
     )
-    return "已开启【深度闭关】（8小时）。结束后，下次发言/指令将自动结算。大墟风沙隔绝尘世。"
+    return format_block(
+        "深度闭关开启",
+        [
+            "时长：8小时",
+            "结算：结束后，下次发言/指令自动结算。",
+            "提示：大墟风沙隔绝尘世。",
+        ],
+    )
 
 
 async def deep_status(user_id: int) -> str:
@@ -496,7 +518,10 @@ async def deep_status(user_id: int) -> str:
         return "你当前未在深度闭关中。"
     now = int(time.time())
     left = max(0, p[11] - now)
-    return f"深度闭关剩余：{left//3600}小时{(left%3600)//60}分钟{left%60}秒。"
+    return format_block(
+        "深度闭关",
+        [f"剩余时间：{left//3600}小时{(left%3600)//60}分钟{left%60}秒"],
+    )
 
 
 def simulate_one_train(tier: int, stage: int, toxic_points: int) -> int:
@@ -546,7 +571,14 @@ async def settle_deep_if_due(msg: Message) -> Optional[str]:
     await set_player_field(user_id, deep_active=0, deep_start_ts=0, deep_end_ts=0)
 
     p2 = await get_player(user_id)
-    return f"【深度闭关结算】模拟闭关 {loops} 次，修为变化：{total:+d}\n当前境界：{realm_name(p2[4], p2[5])}"
+    return format_block(
+        "深度闭关结算",
+        [
+            f"模拟闭关：{loops}次",
+            f"修为变化：{total:+d}",
+            f"当前境界：{realm_name(p2[4], p2[5])}",
+        ],
+    )
 
 
 async def force_end_deep(user_id: int) -> str:
@@ -578,7 +610,15 @@ async def force_end_deep(user_id: int) -> str:
     await set_player_field(user_id, deep_active=0, deep_start_ts=0, deep_end_ts=0)
 
     p2 = await get_player(user_id)
-    return f"你强行出关，收益大打折扣。\n结算：模拟 {loops} 次，修为变化：{total:+d}\n当前境界：{realm_name(p2[4], p2[5])}"
+    return format_block(
+        "强行出关",
+        [
+            "提示：强行出关，收益大打折扣。",
+            f"模拟闭关：{loops}次",
+            f"修为变化：{total:+d}",
+            f"当前境界：{realm_name(p2[4], p2[5])}",
+        ],
+    )
 
 
 async def do_passive(msg: Message):
@@ -735,17 +775,19 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         return "未知天道指令。发送 .天 帮助 查看可用指令。"
 
     if cmd == "帮助":
-        return (
-            "基础指令（全部以 . 开头）：\n"
-            ".检测灵体\n"
-            ".我的灵体\n"
-            ".闭关修炼\n"
-            ".深度闭关 / .查看闭关 / .强行出关\n"
-            ".储物袋\n"
-            ".服用 丹药名*数量\n"
-            ".传闻\n"
-            ".世界观 / .人物 / .势力 / .地名\n"
-            ".天 帮助（管理员）\n"
+        return format_block(
+            "指令一览",
+            [
+                ".检测灵体",
+                ".我的灵体",
+                ".闭关修炼",
+                ".深度闭关 / .查看闭关 / .强行出关",
+                ".储物袋",
+                ".服用 丹药名*数量",
+                ".传闻",
+                ".世界观 / .人物 / .势力 / .地名",
+                ".天 帮助（管理员）",
+            ],
         )
 
     if cmd == "检测灵体":
@@ -755,12 +797,15 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         daohao = gen_daohao()
         lingti = weighted_choice(LINGTI_POOL)
         await create_player(user_id, nick, daohao, lingti)
-        return (
-            f"天机显化：道友\n"
-            f"先天灵体：{lingti}\n"
-            f"已入仙途：{realm_name(0,1)}\n"
-            "身处大墟，万象皆险。\n"
-            "可发送 .闭关修炼 开始修行。"
+        return format_block(
+            "检测灵体",
+            [
+                f"道友：{nick}",
+                f"先天灵体：{lingti}",
+                f"当前境界：{realm_name(0,1)}",
+                "身处大墟，万象皆险。",
+            ],
+            ["提示：可发送 .闭关修炼 开始修行。"],
         )
 
     if cmd == "我的灵体":
@@ -768,9 +813,16 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         if not p:
             return "你尚未入道，请先发送 .检测灵体。"
         cur_in_phase, cap_in_phase = exp_view_in_phase(p[6], p[4], p[5])
-        return (
-            f"道友：{p[1]}\n道号：{p[2]}\n灵体：{p[3]}\n"
-            f"境界：{realm_name(p[4], p[5])}\n当前修为：{cur_in_phase}/{cap_in_phase}\n灵石：{p[7]}\n"
+        return format_block(
+            "道友档案",
+            [
+                f"道友：{p[1]}",
+                f"道号：{p[2]}",
+                f"灵体：{p[3]}",
+                f"境界：{realm_name(p[4], p[5])}",
+                f"当前修为：{cur_in_phase}/{cap_in_phase}",
+                f"灵石：{p[7]}",
+            ],
         )
 
 
@@ -793,11 +845,11 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         items = await inv_get_all(user_id)
         if not items:
             return "储物袋空空如也。"
-        lines = ["储物袋："]
+        lines = []
         for it, qty in items:
             if qty > 0:
                 lines.append(f"- {it} × {qty}")
-        return "\n".join(lines)
+        return format_block("储物袋", lines)
 
     if cmd == "传闻":
         return lore_pick("传闻") or "暂无传闻。"
@@ -819,21 +871,21 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         if not p:
             return "你尚未入道，请先发送 .检测灵体。"
         if not rest.strip():
-            return "用法：.服用 丹药名*数量  （例如：.服用 聚气丹*2）"
+            return "用法：.服用 丹药名*数量（例如：.服用 聚气丹*2）"
         name, qty = parse_item_qty(rest)
         qty = max(1, qty)
 
         have = await inv_get(user_id, name)
         if have < qty:
-            return f"储物袋中不足（拥有 {have}）。"
+            return format_block("服用失败", [f"储物袋中不足（拥有 {have}）。"])
 
         pill = PILLS.get(name)
         if not pill:
-            return f"未知丹药：{name}（延康丹房仅内置：{', '.join(PILLS.keys())}）"
+            return format_block("服用失败", [f"未知丹药：{name}", f"延康丹房仅内置：{', '.join(PILLS.keys())}"])
 
         tier, stage = p[4], p[5]
         if (tier < pill["min_tier"]) or (tier == pill["min_tier"] and stage < pill["min_stage"]):
-            return f"境界不足，无法承受药力。"
+            return format_block("服用失败", ["境界不足，无法承受药力。"])
 
         # 扣库存
         await inv_add(user_id, name, -qty)
@@ -845,7 +897,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
 
         if pill.get("clear_toxic"):
             await set_player_field(user_id, toxic_points=0, last_pill_name="", last_pill_ts=0)
-            return "洗髓丹入腹，丹毒尽消，道心澄明。"
+            return format_block("服用成功", ["洗髓丹入腹，丹毒尽消，道心澄明。"])
 
         # 同类丹药24小时内连续服用→丹毒累积（模板描述）
         if last_name == name and (now - last_ts) <= 24 * 60 * 60:
@@ -860,7 +912,17 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         await maybe_rank_up(user_id)
 
         p2 = await get_player(user_id)
-        return f"服用×{qty}，修为 +{gain}。\n当前境界：{realm_name(p2[4], p2[5])}\n丹毒层数：{toxic_points}"
+        cur_in_phase, cap_in_phase = exp_view_in_phase(p2[6], p2[4], p2[5])
+        return format_block(
+            "服用成功",
+            [
+                f"丹药：{name} × {qty}",
+                f"修为变化：+{gain}",
+                f"当前境界：{realm_name(p2[4], p2[5])}",
+                f"当前修为：{cur_in_phase}/{cap_in_phase}",
+                f"丹毒层数：{toxic_points}",
+            ],
+        )
 
     return None
 
@@ -884,7 +946,7 @@ async def main():
         # 深度闭关到期自动结算（模板描述）
         settled = await settle_deep_if_due(msg)
         if settled:
-            await msg.reply(settled)
+            await msg.reply(settled, parse_mode="HTML")
 
         # 解析 .指令
         parsed = parse_cmd(msg.text or "")
@@ -892,9 +954,9 @@ async def main():
             cmd, rest = parsed
             res = await handle_cmd(msg, cmd, rest)
             if res:
-                await msg.reply(res)
+                await msg.reply(res, parse_mode="HTML")
             else:
-                await msg.reply("未知指令。发送 .帮助 查看可用指令。")
+                await msg.reply("未知指令。发送 .帮助 查看可用指令。", parse_mode="HTML")
             return
 
         # 被动修为（模板描述：群内有效发言自动增加微量修为）
