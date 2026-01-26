@@ -17,6 +17,11 @@ from aiogram.types import Message
 # ----------------------------
 DB_PATH = "data/mushenji.sqlite3"
 PREFIX = "."
+ADMIN_USER_IDS = {
+    int(uid)
+    for uid in os.getenv("ADMIN_USER_IDS", "").split(",")
+    if uid.strip().isdigit()
+}
 
 # 闭关冷却：10-15分钟（规格书）
 TRAIN_CD_MIN = 10 * 60
@@ -34,17 +39,51 @@ PASSIVE_GAIN = 1
 # 一些基础丹药（用于MVP测试；后续你可以完全换成模板里的物品体系）
 PILLS: Dict[str, dict] = {
     "聚气丹": {"exp": 120, "min_tier": 0, "min_stage": 1},
-    "清灵丹": {"exp": 0, "min_tier": 0, "min_stage": 1, "clear_toxic": True},
+    "培元丹": {"exp": 90, "min_tier": 0, "min_stage": 1},
+    "洗髓丹": {"exp": 0, "min_tier": 0, "min_stage": 1, "clear_toxic": True},
+    "金髓丹": {"exp": 260, "min_tier": 0, "min_stage": 2},
+    "玄灵丹": {"exp": 420, "min_tier": 1, "min_stage": 1},
 }
 
 # 灵体示例（后续你可以按模板更细化）
 LINGTI_POOL = [
-    ("青龙灵体", 24.9),
-    ("朱雀灵体", 24.9),
-    ("白虎灵体", 24.9),
-    ("玄武灵体", 24.9),
-    ("霸体", 0.4),
+    ("青龙灵体", 21.5),
+    ("朱雀灵体", 21.5),
+    ("白虎灵体", 21.5),
+    ("玄武灵体", 21.5),
+    ("日耀灵体", 6.0),
+    ("月华灵体", 6.0),
+    ("霸体", 1.5),
+    ("剑心通明", 0.5),
 ]
+
+LORE = {
+    "世界观": [
+        "大墟风沙如海，残老村的灯火却从未熄灭。",
+        "延康皇朝方兴未艾，世间诸教暗流涌动。",
+        "古神低语回荡在黑暗中，谁也说不清是福是祸。",
+        "太虚深处偶现神桥残影，疑是上古遗泽。",
+    ],
+    "人物": [
+        "有游侠踏入大墟，誓要解开古神之谜。",
+        "有人自称来自延康，口口声声要重塑旧日秩序。",
+    ],
+    "势力": [
+        "延康皇朝",
+        "天圣教",
+        "残老村",
+    ],
+    "地名": [
+        "大墟",
+        "太虚",
+        "延康",
+    ],
+    "传闻": [
+        "旧日遗迹重现，传闻有神兵出世。",
+        "黑暗中传来钟声，似在召唤沉睡的古神。",
+        "有人在风沙中见到不该存在的城池。",
+    ],
+}
 
 DAOHAO_PREFIX = [
     "赵", "钱", "孙", "李", "周", "吴", "郑", "王",
@@ -141,7 +180,7 @@ async def create_player(user_id: int, nick: str, daohao: str, lingti: str):
         )
         # 初始发一点丹药用于测试
         await db.execute("INSERT OR IGNORE INTO inv(user_id,item,qty) VALUES(?,?,?)", (user_id, "聚气丹", 3))
-        await db.execute("INSERT OR IGNORE INTO inv(user_id,item,qty) VALUES(?,?,?)", (user_id, "清灵丹", 1))
+        await db.execute("INSERT OR IGNORE INTO inv(user_id,item,qty) VALUES(?,?,?)", (user_id, "洗髓丹", 1))
         await db.commit()
 
 
@@ -313,6 +352,41 @@ def parse_item_qty(spec: str) -> Tuple[str, int]:
     return s, 1
 
 
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_USER_IDS
+
+
+def parse_admin_args(text: str) -> Tuple[str, str]:
+    if not text:
+        return "", ""
+    parts = text.strip().split(maxsplit=1)
+    action = parts[0] if parts else ""
+    rest = parts[1] if len(parts) > 1 else ""
+    return action, rest
+
+
+def parse_user_id(value: str) -> Optional[int]:
+    if not value:
+        return None
+    if value.isdigit():
+        return int(value)
+    return None
+
+
+def lore_pick(category: str) -> Optional[str]:
+    lines = LORE.get(category, [])
+    if not lines:
+        return None
+    return random.choice(lines)
+
+
+def lore_list(category: str) -> Optional[str]:
+    lines = LORE.get(category, [])
+    if not lines:
+        return None
+    return "、".join(lines)
+
+
 def apply_toxicity_effect(toxic_points: int) -> Tuple[float, float]:
     """
     返回 (收益倍率, 成功率修正) —— 只是MVP默认值，你后续可按模板细化
@@ -361,7 +435,7 @@ async def do_train(user_id: int) -> str:
     else:
         # 成功：大收益
         delta = base
-        extra = "吐纳有成，灵气入体！"
+        extra = "吐纳有成，灵气入体！大墟灵气回涌，周身一暖。"
         # 奇遇（模板描述“有几率触发奇遇”）
         if random.random() < 0.08:
             bonus = random.randint(30, 120)
@@ -380,18 +454,18 @@ async def do_train(user_id: int) -> str:
     await set_player_field(user_id, train_ready_ts=now + cd)
 
     p2 = await get_player(user_id)
-tier2, stage2, exp2 = p2[4], p2[5], p2[6]
+    tier2, stage2, exp2 = p2[4], p2[5], p2[6]
 
-cur_in_phase, cap_in_phase = exp_view_in_phase(exp2, tier2, stage2)
-mins = (cd + 59) // 60
+    cur_in_phase, cap_in_phase = exp_view_in_phase(exp2, tier2, stage2)
+    mins = (cd + 59) // 60
 
-return (
-    f"{extra}\n"
-    f"本次修为变化：{delta:+d}\n"
-    f"当前境界：{realm_name(tier2, stage2)}\n"
-    f"当前修为：{cur_in_phase}/{cap_in_phase}\n"
-    f"你感到一阵疲惫，需要打坐调息{mins}分钟方可再次闭关。"
-)
+    return (
+        f"{extra}\n"
+        f"本次修为变化：{delta:+d}\n"
+        f"当前境界：{realm_name(tier2, stage2)}\n"
+        f"当前修为：{cur_in_phase}/{cap_in_phase}\n"
+        f"你感到一阵疲惫，需要打坐调息{mins}分钟方可再次闭关。"
+    )
 
 async def start_deep(user_id: int) -> str:
     p = await get_player(user_id)
@@ -411,7 +485,7 @@ async def start_deep(user_id: int) -> str:
         deep_end_ts=now + DEEP_DURATION,
         deep_next_ts=now + DEEP_COOLDOWN,
     )
-    return "已开启【深度闭关】（8小时）。结束后，下次发言/指令将自动结算。"
+    return "已开启【深度闭关】（8小时）。结束后，下次发言/指令将自动结算。大墟风沙隔绝尘世。"
 
 
 async def deep_status(user_id: int) -> str:
@@ -542,6 +616,124 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
     user_id = msg.from_user.id
     nick = msg.from_user.full_name or "道友"
 
+    if cmd == "天":
+        if not is_admin(user_id):
+            return "此指令仅天道可用。"
+
+        action, args = parse_admin_args(rest)
+        if not action or action == "帮助":
+            return (
+                "天道指令：\n"
+                ".天 查档 用户ID\n"
+                ".天 设置修为 用户ID 修为值\n"
+                ".天 境界 用户ID 境界序号 阶段(1-3)\n"
+                ".天 发放 用户ID 物品名 数量\n"
+                ".天 清丹毒 用户ID\n"
+                ".天 重置闭关 用户ID\n"
+            )
+
+        if action == "查档":
+            target_id = parse_user_id(args.strip())
+            if target_id is None:
+                return "用法：.天 查档 用户ID"
+            p = await get_player(target_id)
+            if not p:
+                return "目标尚未入道。"
+            cur_in_phase, cap_in_phase = exp_view_in_phase(p[6], p[4], p[5])
+            return (
+                f"道友：{p[1]}\n道号：{p[2]}\n灵体：{p[3]}\n"
+                f"境界：{realm_name(p[4], p[5])}\n当前修为：{cur_in_phase}/{cap_in_phase}\n"
+                f"灵石：{p[7]}\n丹毒层数：{p[14]}"
+            )
+
+        if action == "设置修为":
+            parts = args.split()
+            if len(parts) != 2:
+                return "用法：.天 设置修为 用户ID 修为值"
+            target_id = parse_user_id(parts[0])
+            if target_id is None:
+                return "用户ID无效。"
+            try:
+                exp_value = int(parts[1])
+            except ValueError:
+                return "修为值必须是整数。"
+            p = await get_player(target_id)
+            if not p:
+                return "目标尚未入道。"
+            await set_player_field(target_id, exp=max(0, exp_value))
+            await maybe_rank_up(target_id)
+            return "已调整修为。"
+
+        if action == "境界":
+            parts = args.split()
+            if len(parts) != 3:
+                return "用法：.天 境界 用户ID 境界序号 阶段(1-3)"
+            target_id = parse_user_id(parts[0])
+            if target_id is None:
+                return "用户ID无效。"
+            try:
+                tier = int(parts[1])
+                stage = int(parts[2])
+            except ValueError:
+                return "境界序号与阶段必须是整数。"
+            tier = max(0, min(tier, len(REALM_TIERS) - 1))
+            stage = max(1, min(stage, STAGES_PER_TIER))
+            p = await get_player(target_id)
+            if not p:
+                return "目标尚未入道。"
+            await set_player_field(target_id, tier=tier, stage=stage)
+            return f"已调整境界为：{realm_name(tier, stage)}"
+
+        if action == "发放":
+            parts = args.split()
+            if len(parts) < 3:
+                return "用法：.天 发放 用户ID 物品名 数量"
+            target_id = parse_user_id(parts[0])
+            if target_id is None:
+                return "用户ID无效。"
+            try:
+                qty = int(parts[-1])
+            except ValueError:
+                return "数量必须是整数。"
+            item = " ".join(parts[1:-1]).strip()
+            if not item:
+                return "物品名不能为空。"
+            p = await get_player(target_id)
+            if not p:
+                return "目标尚未入道。"
+            await inv_add(target_id, item, qty)
+            return f"已发放 {item} × {qty}。"
+
+        if action == "清丹毒":
+            target_id = parse_user_id(args.strip())
+            if target_id is None:
+                return "用法：.天 清丹毒 用户ID"
+            p = await get_player(target_id)
+            if not p:
+                return "目标尚未入道。"
+            await set_player_field(target_id, toxic_points=0, last_pill_name="", last_pill_ts=0)
+            return "已清除丹毒。"
+
+        if action == "重置闭关":
+            target_id = parse_user_id(args.strip())
+            if target_id is None:
+                return "用法：.天 重置闭关 用户ID"
+            p = await get_player(target_id)
+            if not p:
+                return "目标尚未入道。"
+            await set_player_field(
+                target_id,
+                train_ready_ts=0,
+                deep_active=0,
+                deep_start_ts=0,
+                deep_end_ts=0,
+                deep_next_ts=0,
+                passive_ready_ts=0,
+            )
+            return "已重置闭关与冷却。"
+
+        return "未知天道指令。发送 .天 帮助 查看可用指令。"
+
     if cmd == "帮助":
         return (
             "基础指令（全部以 . 开头）：\n"
@@ -551,6 +743,9 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
             ".深度闭关 / .查看闭关 / .强行出关\n"
             ".储物袋\n"
             ".服用 丹药名*数量\n"
+            ".传闻\n"
+            ".世界观 / .人物 / .势力 / .地名\n"
+            ".天 帮助（管理员）\n"
         )
 
     if cmd == "检测灵体":
@@ -560,7 +755,13 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         daohao = gen_daohao()
         lingti = weighted_choice(LINGTI_POOL)
         await create_player(user_id, nick, daohao, lingti)
-        return f"天机显化：道友\n先天灵体：{lingti}\n已入仙途：{realm_name(0,1)}\n可发送 .闭关修炼 开始修行。"
+        return (
+            f"天机显化：道友\n"
+            f"先天灵体：{lingti}\n"
+            f"已入仙途：{realm_name(0,1)}\n"
+            "身处大墟，万象皆险。\n"
+            "可发送 .闭关修炼 开始修行。"
+        )
 
     if cmd == "我的灵体":
         p = await get_player(user_id)
@@ -598,6 +799,21 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
                 lines.append(f"- {it} × {qty}")
         return "\n".join(lines)
 
+    if cmd == "传闻":
+        return lore_pick("传闻") or "暂无传闻。"
+
+    if cmd == "世界观":
+        return lore_pick("世界观") or "暂无世界观条目。"
+
+    if cmd == "人物":
+        return lore_pick("人物") or "暂无人物条目。"
+
+    if cmd == "势力":
+        return lore_list("势力") or "暂无势力条目。"
+
+    if cmd == "地名":
+        return lore_list("地名") or "暂无地名条目。"
+
     if cmd == "服用":
         p = await get_player(user_id)
         if not p:
@@ -613,7 +829,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
 
         pill = PILLS.get(name)
         if not pill:
-            return f"未知丹药：{name}（MVP仅内置：{', '.join(PILLS.keys())}）"
+            return f"未知丹药：{name}（延康丹房仅内置：{', '.join(PILLS.keys())}）"
 
         tier, stage = p[4], p[5]
         if (tier < pill["min_tier"]) or (tier == pill["min_tier"] and stage < pill["min_stage"]):
@@ -629,7 +845,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
 
         if pill.get("clear_toxic"):
             await set_player_field(user_id, toxic_points=0, last_pill_name="", last_pill_ts=0)
-            return "清灵丹入腹，丹毒尽消，道心澄明。"
+            return "洗髓丹入腹，丹毒尽消，道心澄明。"
 
         # 同类丹药24小时内连续服用→丹毒累积（模板描述）
         if last_name == name and (now - last_ts) <= 24 * 60 * 60:
