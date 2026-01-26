@@ -10,6 +10,7 @@ from typing import Optional, Tuple, Dict
 
 import aiosqlite
 from dotenv import load_dotenv
+load_dotenv()
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
 
@@ -71,7 +72,7 @@ LORE = {
     ],
     "势力": [
         "延康皇朝",
-        "天圣教",
+        "天道圣教",
         "残老村",
     ],
     "地名": [
@@ -118,7 +119,7 @@ DAOHAO_SUFFIX = [
     "澄明", "澄心", "澄一"
 ]
 
-REALM_TIERS = ["灵胎", "五曜", "六合", "七星", "天人","生死","神桥"]  # MVP占位
+REALM_TIERS = ["灵胎", "五曜", "六合", "七星", "天道人","生死","神桥"]  # MVP占位
 STAGES_PER_TIER = 3
 
 
@@ -656,7 +657,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
     user_id = msg.from_user.id
     nick = msg.from_user.full_name or "道友"
 
-    if cmd == "天":
+    if cmd == "天道":
         if not is_admin(user_id):
             return "此指令仅天道可用。"
 
@@ -664,18 +665,18 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         if not action or action == "帮助":
             return (
                 "天道指令：\n"
-                ".天 查档 用户ID\n"
-                ".天 设置修为 用户ID 修为值\n"
-                ".天 境界 用户ID 境界序号 阶段(1-3)\n"
-                ".天 发放 用户ID 物品名 数量\n"
-                ".天 清丹毒 用户ID\n"
-                ".天 重置闭关 用户ID\n"
+                ".天道 查档 用户ID\n"
+                ".天道 设置修为 用户ID 修为值\n"
+                ".天道 境界 用户ID 境界序号 阶段(1-3)\n"
+                ".天道 发放 用户ID 物品名 数量\n"
+                ".天道 清丹毒 用户ID\n"
+                ".天道 重置闭关 用户ID\n"
             )
 
         if action == "查档":
             target_id = parse_user_id(args.strip())
             if target_id is None:
-                return "用法：.天 查档 用户ID"
+                return "用法：.天道 查档 用户ID"
             p = await get_player(target_id)
             if not p:
                 return "目标尚未入道。"
@@ -689,7 +690,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         if action == "设置修为":
             parts = args.split()
             if len(parts) != 2:
-                return "用法：.天 设置修为 用户ID 修为值"
+                return "用法：.天道 设置修为 用户ID 修为值"
             target_id = parse_user_id(parts[0])
             if target_id is None:
                 return "用户ID无效。"
@@ -707,7 +708,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         if action == "境界":
             parts = args.split()
             if len(parts) != 3:
-                return "用法：.天 境界 用户ID 境界序号 阶段(1-3)"
+                return "用法：.天道 境界 用户ID 境界序号 阶段(1-3)"
             target_id = parse_user_id(parts[0])
             if target_id is None:
                 return "用户ID无效。"
@@ -727,7 +728,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         if action == "发放":
             parts = args.split()
             if len(parts) < 3:
-                return "用法：.天 发放 用户ID 物品名 数量"
+                return "用法：.天道 发放 用户ID 物品名 数量"
             target_id = parse_user_id(parts[0])
             if target_id is None:
                 return "用户ID无效。"
@@ -747,7 +748,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         if action == "清丹毒":
             target_id = parse_user_id(args.strip())
             if target_id is None:
-                return "用法：.天 清丹毒 用户ID"
+                return "用法：.天道 清丹毒 用户ID"
             p = await get_player(target_id)
             if not p:
                 return "目标尚未入道。"
@@ -757,7 +758,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         if action == "重置闭关":
             target_id = parse_user_id(args.strip())
             if target_id is None:
-                return "用法：.天 重置闭关 用户ID"
+                return "用法：.天道 重置闭关 用户ID"
             p = await get_player(target_id)
             if not p:
                 return "目标尚未入道。"
@@ -772,7 +773,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
             )
             return "已重置闭关与冷却。"
 
-        return "未知天道指令。发送 .天 帮助 查看可用指令。"
+        return "未知天道指令。发送 .天道 帮助 查看可用指令。"
 
     if cmd == "帮助":
         return format_block(
@@ -786,7 +787,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
                 ".服用 丹药名*数量",
                 ".传闻",
                 ".世界观 / .人物 / .势力 / .地名",
-                ".天 帮助（管理员）",
+                ".天道 帮助（管理员）",
             ],
         )
 
@@ -801,7 +802,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
             "检测灵体",
             [
                 f"道友：{nick}",
-                f"先天灵体：{lingti}",
+                f"先天道灵体：{lingti}",
                 f"当前境界：{realm_name(0,1)}",
                 "身处大墟，万象皆险。",
             ],
@@ -931,11 +932,11 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
 # Bot
 # ----------------------------
 async def main():
-    load_dotenv()
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token:
-        raise RuntimeError("缺少 TELEGRAM_BOT_TOKEN")
 
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+        if not token:
+            raise RuntimeError("缺少 TELEGRAM_BOT_TOKEN")
+    
     await db_init()
 
     bot = Bot(token=token)
@@ -966,4 +967,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
