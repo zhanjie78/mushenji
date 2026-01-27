@@ -614,6 +614,37 @@ async def limited_stock_add(item: str, delta: int) -> int:
     return new_qty
 
 
+async def limited_stock_get(item: str) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT qty FROM limited_stock WHERE item=?", (item,))
+        row = await cur.fetchone()
+        return row[0] if row else 0
+
+
+async def limited_stock_all() -> dict[str, int]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT item, qty FROM limited_stock ORDER BY item")
+        rows = await cur.fetchall()
+        return {item: qty for item, qty in rows}
+
+
+async def limited_stock_set(item: str, qty: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO limited_stock(item, qty) VALUES(?, ?) "
+            "ON CONFLICT(item) DO UPDATE SET qty=excluded.qty",
+            (item, max(0, qty)),
+        )
+        await db.commit()
+
+
+async def limited_stock_add(item: str, delta: int) -> int:
+    current = await limited_stock_get(item)
+    new_qty = max(0, current + delta)
+    await limited_stock_set(item, new_qty)
+    return new_qty
+
+
 # ----------------------------
 # 业务逻辑（MVP版）
 # ----------------------------
@@ -641,6 +672,10 @@ def weighted_choice_with_weight(pool: list[tuple[str, int]]) -> tuple[str, int]:
 
 def gen_daohao() -> str:
     return random.choice(DAOHAO_PREFIX) + random.choice(DAOHAO_SUFFIX)
+
+
+def format_materials(mats: list[tuple[str, int]]) -> str:
+    return "、".join([f"{name}×{qty}" for name, qty in mats])
 
 
 def format_materials(mats: list[tuple[str, int]]) -> str:
@@ -1040,6 +1075,40 @@ async def do_train(user_id: int) -> str:
 
     footer_lines = [f"调息：{mins}分钟后可再次闭关。"]
     return format_block("闭关修炼", detail_lines, footer_lines)
+
+
+async def pick_recipe_by_kind(kind: str, max_tier: int = 1) -> Optional[str]:
+    candidates = [
+        name for name, info in RECIPES.items()
+        if info["kind"] == kind and info.get("tier", 0) <= max_tier
+    ]
+    if not candidates:
+        return None
+    return random.choice(candidates)
+
+
+def craft_cost(target_name: str, kind: str) -> int:
+    if kind == "丹方":
+        info = PILLS.get(target_name, {})
+        return max(5, int(info.get("price", 0) * 0.35))
+    if kind == "武器方":
+        info = WEAPONS.get(target_name, {})
+        return max(12, int(info.get("price", 0) * 0.25))
+    if kind == "护具方":
+        info = ARMORS.get(target_name, {})
+        return max(10, int(info.get("price", 0) * 0.25))
+    return 0
+
+
+async def roll_training_loot(user_id: int, chance: float) -> list[str]:
+    if random.random() > chance:
+        return []
+    item, weight = weighted_choice_with_weight(TRAIN_LOOT_POOL)
+    qty = 1 if weight <= 8 else random.randint(1, 2)
+    if item == "四灵血":
+        qty = 1
+    await inv_add(user_id, item, qty)
+    return [f"获得{item}×{qty}"]
 
 
 async def pick_recipe_by_kind(kind: str, max_tier: int = 1) -> Optional[str]:
@@ -1490,6 +1559,43 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
             new_qty = await limited_stock_add(item, -delta)
             return f"已扣减 {item} 限量库存，当前 {new_qty}。"
 
+        if action == "限量库存":
+            stocks = await limited_stock_all()
+            if not stocks:
+                return "暂无限量库存数据。"
+            lines = ["限量库存："]
+            for name, qty in stocks.items():
+                lines.append(f"{name} × {qty}")
+            return "\n".join(lines)
+
+        if action in ("设置限量", "加限量", "扣限量"):
+            parts = args.split()
+            if len(parts) < 2:
+                return f"用法：.天道 {action} 物品名 数量"
+            try:
+                delta = int(parts[-1])
+            except ValueError:
+                return "数量必须是整数。"
+            if action == "设置限量":
+                if delta < 0:
+                    return "数量必须为非负整数。"
+            else:
+                if delta <= 0:
+                    return "数量必须为正整数。"
+            item = " ".join(parts[:-1]).strip()
+            if not item:
+                return "物品名不能为空。"
+            if item not in LIMITED_ITEMS:
+                return f"该物品不是限量物品：{item}"
+            if action == "设置限量":
+                await limited_stock_set(item, delta)
+                return f"已设置 {item} 限量库存为 {max(0, delta)}。"
+            if action == "加限量":
+                new_qty = await limited_stock_add(item, delta)
+                return f"已增加 {item} 限量库存，当前 {new_qty}。"
+            new_qty = await limited_stock_add(item, -delta)
+            return f"已扣减 {item} 限量库存，当前 {new_qty}。"
+
         if action == "清丹毒":
             target_id = parse_user_id(args.strip())
             if target_id is None:
@@ -1800,6 +1906,26 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         if pill.get("clear_toxic"):
             await set_player_field(user_id, toxic_points=0, last_pill_name="", last_pill_ts=0)
             return format_block("服用成功", ["洗髓丹入腹，丹毒尽消，道心澄明。"])
+
+        if pill.get("reduce_toxic"):
+            toxic_points = max(0, toxic_points - pill["reduce_toxic"] * qty)
+            await set_player_field(user_id, toxic_points=toxic_points, last_pill_name="", last_pill_ts=0)
+            gain = pill["exp"] * qty
+            if gain:
+                await add_exp(user_id, gain)
+                await maybe_rank_up(user_id)
+            p2 = await get_player(user_id)
+            cur_in_phase, cap_in_phase = exp_view_in_phase(p2[6], p2[4], p2[5])
+            return format_block(
+                "服用成功",
+                [
+                    f"丹药：{name} × {qty}",
+                    f"修为变化：+{gain}",
+                    f"当前境界：{realm_name(p2[4], p2[5])}",
+                    f"当前修为：{cur_in_phase}/{cap_in_phase}",
+                    f"丹毒层数：{toxic_points}",
+                ],
+            )
 
         if pill.get("reduce_toxic"):
             toxic_points = max(0, toxic_points - pill["reduce_toxic"] * qty)
