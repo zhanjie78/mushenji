@@ -38,6 +38,24 @@ PASSIVE_CD = 60
 PASSIVE_MIN_LEN = 6
 PASSIVE_GAIN = 1
 
+# 任务冷却（默认6小时）
+TASK_COOLDOWN = 6 * 60 * 60
+
+# 闭关掉落
+TRAIN_LOOT_CHANCE = 0.12
+DEEP_LOOT_CHANCE = 0.25
+TRAIN_LOOT_POOL = [
+    ("灵木", 35),
+    ("星砂", 30),
+    ("玄铁矿", 25),
+    ("黑曜石", 20),
+    ("灵泉露", 18),
+    ("玄玉", 12),
+    ("天蚕丝", 8),
+    ("龙鳞", 4),
+    ("四灵血", 2),
+]
+
 # 一些基础丹药（用于MVP测试；后续你可以完全换成模板里的物品体系）
 PILLS: Dict[str, dict] = {
     "聚气丹": {"exp": 120, "min_tier": 0, "min_stage": 1, "price": 18, "desc": "聚拢灵气"},
@@ -256,6 +274,18 @@ RECIPES: Dict[str, dict] = {
     "九霄战衣护具方": {"kind": "护具方", "target": "九霄战衣", "tier": 3, "price": 680, "desc": "九霄护衣"},
 }
 
+
+def ensure_recipe_materials() -> None:
+    for name, info in RECIPES.items():
+        if info.get("mats"):
+            continue
+        kind = info["kind"]
+        tier = info.get("tier", 0)
+        mats = RECIPE_MATERIALS.get(kind, {}).get(tier)
+        if mats:
+            info["mats"] = mats
+
+
 SUPER_RARE: Dict[str, dict] = {
     "混元天书": {"rarity": "限量", "price": 8800, "desc": "记载天道秘术"},
     "太虚残镜": {"rarity": "限量", "price": 7600, "desc": "映照太虚之力"},
@@ -317,8 +347,6 @@ def ensure_recipes() -> None:
         }
 
 
-ensure_recipes()
-
 # 灵体示例（后续你可以按模板更细化）
 LINGTI_POOL = [
     ("青龙灵体", 21.5),
@@ -358,6 +386,43 @@ LORE = {
         "有人在风沙中见到不该存在的城池。",
     ],
 }
+
+SECTS = {
+    "延康皇朝": {"desc": "军阵炼体，重器道统", "starter_kind": "武器方"},
+    "天道圣教": {"desc": "丹道传承，护道镇魂", "starter_kind": "丹方"},
+    "残老村": {"desc": "隐世炼器，守护之道", "starter_kind": "护具方"},
+}
+
+RECIPE_MATERIALS = {
+    "丹方": {
+        0: [("星砂", 2), ("灵泉露", 1)],
+        1: [("星砂", 3), ("玄玉", 1)],
+        2: [("星砂", 4), ("魂玉", 1)],
+        3: [("星砂", 5), ("魂玉", 2)],
+        4: [("星砂", 6), ("龙血晶", 1)],
+        5: [("星砂", 7), ("龙血晶", 2)],
+    },
+    "武器方": {
+        0: [("玄铁矿", 2), ("灵木", 1)],
+        1: [("玄铁矿", 3), ("赤金", 1)],
+        2: [("玄金", 2), ("黑曜石", 1)],
+        3: [("玄金", 3), ("玄星铁", 1)],
+        4: [("玄星铁", 2), ("龙血晶", 1)],
+        5: [("龙血晶", 2), ("天罡石", 1)],
+    },
+    "护具方": {
+        0: [("黑曜石", 2), ("灵木", 1)],
+        1: [("黑曜石", 3), ("天蚕丝", 1)],
+        2: [("玄玉", 2), ("天蚕丝", 1)],
+        3: [("玄星铁", 1), ("天蚕丝", 2)],
+        4: [("玄星铁", 2), ("凤羽", 1)],
+        5: [("龙鳞", 2), ("凤羽", 1)],
+    },
+}
+
+
+ensure_recipes()
+ensure_recipe_materials()
 
 DAOHAO_PREFIX = [
     "赵", "钱", "孙", "李", "周", "吴", "郑", "王",
@@ -420,7 +485,10 @@ CREATE TABLE IF NOT EXISTS player (
 
   toxic_points INTEGER DEFAULT 0,
   last_pill_name TEXT DEFAULT '',
-  last_pill_ts INTEGER DEFAULT 0
+  last_pill_ts INTEGER DEFAULT 0,
+
+  sect TEXT DEFAULT '',
+  task_ready_ts INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS inv (
@@ -441,6 +509,12 @@ async def db_init():
     os.makedirs("data", exist_ok=True)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.executescript(SCHEMA)
+        cur = await db.execute("PRAGMA table_info(player)")
+        cols = {row[1] for row in await cur.fetchall()}
+        if "sect" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN sect TEXT DEFAULT ''")
+        if "task_ready_ts" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN task_ready_ts INTEGER DEFAULT 0")
         if LIMITED_ITEMS:
             await db.executemany(
                 "INSERT OR IGNORE INTO limited_stock(item, qty) VALUES(?, ?)",
@@ -554,8 +628,23 @@ def weighted_choice(pool):
     return pool[-1][0]
 
 
+def weighted_choice_with_weight(pool: list[tuple[str, int]]) -> tuple[str, int]:
+    total = sum(w for _, w in pool)
+    r = random.uniform(0, total)
+    upto = 0
+    for item, w in pool:
+        if upto + w >= r:
+            return item, w
+        upto += w
+    return pool[-1]
+
+
 def gen_daohao() -> str:
     return random.choice(DAOHAO_PREFIX) + random.choice(DAOHAO_SUFFIX)
+
+
+def format_materials(mats: list[tuple[str, int]]) -> str:
+    return "、".join([f"{name}×{qty}" for name, qty in mats])
 
 
 PHASE_CAP_BASE = {1: 500, 2: 1500, 3: 3000}
@@ -815,8 +904,10 @@ async def catalog_lines(category: str) -> Optional[list[str]]:
             if info["kind"] != category:
                 continue
             req = format_realm_requirement(info["tier"], 1)
+            mats = format_materials(info.get("mats", []))
+            mats_info = f"｜材料:{mats}" if mats else ""
             lines.append(
-                f"{name}｜目标:{info['target']}｜需求:{req}｜售价:{info['price']}灵石｜{info['desc']}"
+                f"{name}｜目标:{info['target']}｜需求:{req}｜售价:{info['price']}灵石｜{info['desc']}{mats_info}"
             )
         return lines
     return None
@@ -934,6 +1025,8 @@ async def do_train(user_id: int) -> str:
     cur_in_phase, cap_in_phase = exp_view_in_phase(exp2, tier2, stage2)
     mins = (cd + 59) // 60
 
+    loot_lines = await roll_training_loot(user_id, TRAIN_LOOT_CHANCE)
+
     detail_lines = ["结果："]
     for line in extra.splitlines():
         detail_lines.append(f"- {line}")
@@ -942,9 +1035,45 @@ async def do_train(user_id: int) -> str:
     detail_lines.append(f"- 修为变化：{delta:+d}")
     detail_lines.append(f"- 当前境界：{realm_name(tier2, stage2)}")
     detail_lines.append(f"- 当前修为：{cur_in_phase}/{cap_in_phase}")
+    if loot_lines:
+        detail_lines.extend([f"- {line}" for line in loot_lines])
 
     footer_lines = [f"调息：{mins}分钟后可再次闭关。"]
     return format_block("闭关修炼", detail_lines, footer_lines)
+
+
+async def pick_recipe_by_kind(kind: str, max_tier: int = 1) -> Optional[str]:
+    candidates = [
+        name for name, info in RECIPES.items()
+        if info["kind"] == kind and info.get("tier", 0) <= max_tier
+    ]
+    if not candidates:
+        return None
+    return random.choice(candidates)
+
+
+def craft_cost(target_name: str, kind: str) -> int:
+    if kind == "丹方":
+        info = PILLS.get(target_name, {})
+        return max(5, int(info.get("price", 0) * 0.35))
+    if kind == "武器方":
+        info = WEAPONS.get(target_name, {})
+        return max(12, int(info.get("price", 0) * 0.25))
+    if kind == "护具方":
+        info = ARMORS.get(target_name, {})
+        return max(10, int(info.get("price", 0) * 0.25))
+    return 0
+
+
+async def roll_training_loot(user_id: int, chance: float) -> list[str]:
+    if random.random() > chance:
+        return []
+    item, weight = weighted_choice_with_weight(TRAIN_LOOT_POOL)
+    qty = 1 if weight <= 8 else random.randint(1, 2)
+    if item == "四灵血":
+        qty = 1
+    await inv_add(user_id, item, qty)
+    return [f"获得{item}×{qty}"]
 
 async def start_deep(user_id: int) -> str:
     p = await get_player(user_id)
@@ -1030,6 +1159,7 @@ async def settle_deep_if_due(msg: Message) -> Optional[str]:
 
     await add_exp(user_id, total)
     await maybe_rank_up(user_id)
+    loot_lines = await roll_training_loot(user_id, DEEP_LOOT_CHANCE)
 
     # 结算完关闭深度闭关
     await set_player_field(user_id, deep_active=0, deep_start_ts=0, deep_end_ts=0)
@@ -1041,6 +1171,7 @@ async def settle_deep_if_due(msg: Message) -> Optional[str]:
             f"模拟闭关：{loops}次",
             f"修为变化：{total:+d}",
             f"当前境界：{realm_name(p2[4], p2[5])}",
+            *(loot_lines or []),
         ],
     )
 
@@ -1071,6 +1202,7 @@ async def force_end_deep(user_id: int) -> str:
 
     await add_exp(user_id, total)
     await maybe_rank_up(user_id)
+    loot_lines = await roll_training_loot(user_id, DEEP_LOOT_CHANCE * 0.5)
     await set_player_field(user_id, deep_active=0, deep_start_ts=0, deep_end_ts=0)
 
     p2 = await get_player(user_id)
@@ -1081,6 +1213,7 @@ async def force_end_deep(user_id: int) -> str:
             f"模拟闭关：{loops}次",
             f"修为变化：{total:+d}",
             f"当前境界：{realm_name(p2[4], p2[5])}",
+            *(loot_lines or []),
         ],
     )
 
@@ -1397,7 +1530,10 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
                 ".深度闭关 / .查看闭关 / .强行出关",
                 ".储物袋",
                 ".服用 丹药名*数量",
+                ".炼制 配方名/目标物品*数量",
                 ".图鉴 丹药/武器/护具/材料/丹方/武器方/护具方/限量武器/限量防具/超稀有丹药/限量道具",
+                ".宗门 查看/加入 宗门名",
+                ".任务",
                 ".榜单 灵石/修为",
                 ".传闻",
                 ".世界观 / .人物 / .势力 / .地名",
@@ -1428,6 +1564,8 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         if not p:
             return "你尚未入道，请先发送 .检测灵体。"
         cur_in_phase, cap_in_phase = exp_view_in_phase(p[6], p[4], p[5])
+        sect = p[17] if len(p) > 17 else ""
+        sect_line = f"宗门：{sect}" if sect else "宗门：暂无"
         return format_block(
             "道友档案",
             [
@@ -1437,6 +1575,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
                 f"境界：{realm_name(p[4], p[5])}",
                 f"当前修为：{cur_in_phase}/{cap_in_phase}",
                 f"灵石：{p[7]}",
+                sect_line,
             ],
         )
 
@@ -1478,6 +1617,125 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         if not lines:
             return "未知分类。可选：丹药/武器/护具/材料/丹方/武器方/护具方/限量武器/限量防具/超稀有丹药/限量道具"
         return format_block(f"{category}图鉴", lines, ["提示：天道可用 .天道 发放 发放物品。"])
+
+    if cmd == "宗门":
+        action = rest.strip()
+        if not action or action in ("查看", "列表"):
+            lines = []
+            for name, info in SECTS.items():
+                lines.append(f"{name}｜{info['desc']}")
+            return format_block("宗门一览", lines, ["用法：.宗门 加入 宗门名"])
+        if action.startswith("加入"):
+            parts = action.split(maxsplit=1)
+            if len(parts) != 2:
+                return "用法：.宗门 加入 宗门名"
+            sect_name = parts[1].strip()
+            if sect_name not in SECTS:
+                return "未知宗门。可用：延康皇朝/天道圣教/残老村"
+            p = await get_player(user_id)
+            if not p:
+                return "你尚未入道，请先发送 .检测灵体。"
+            if len(p) > 17 and p[17]:
+                return f"你已加入宗门：{p[17]}"
+            await set_player_field(user_id, sect=sect_name)
+            starter_kind = SECTS[sect_name]["starter_kind"]
+            recipe_name = await pick_recipe_by_kind(starter_kind, max_tier=1)
+            rewards = []
+            if recipe_name:
+                have = await inv_get(user_id, recipe_name)
+                if have == 0:
+                    await inv_add(user_id, recipe_name, 1)
+                    rewards.append(f"{recipe_name}×1")
+            mats = RECIPE_MATERIALS.get(starter_kind, {}).get(0, [])
+            for item, qty in mats:
+                await inv_add(user_id, item, qty)
+                rewards.append(f"{item}×{qty}")
+            reward_line = "、".join(rewards) if rewards else "暂无"
+            return format_block("宗门加入成功", [f"宗门：{sect_name}", f"入门奖励：{reward_line}"])
+        return "用法：.宗门 查看/加入 宗门名"
+
+    if cmd == "任务":
+        p = await get_player(user_id)
+        if not p:
+            return "你尚未入道，请先发送 .检测灵体。"
+        now = int(time.time())
+        task_ready_ts = p[18] if len(p) > 18 else 0
+        if now < task_ready_ts:
+            left = task_ready_ts - now
+            return f"任务冷却中，请在 {left//60}分{left%60}秒 后再试。"
+        sect = p[17] if len(p) > 17 else ""
+        base_stone = random.randint(30, 80)
+        materials_pool = ["灵木", "星砂", "玄铁矿", "黑曜石", "灵泉露", "玄玉", "赤金"]
+        materials = random.sample(materials_pool, k=3)
+        rewards = []
+        for item in materials:
+            qty = random.randint(1, 3)
+            await inv_add(user_id, item, qty)
+            rewards.append(f"{item}×{qty}")
+        await set_player_field(user_id, stone=p[7] + base_stone, task_ready_ts=now + TASK_COOLDOWN)
+        rewards.append(f"灵石×{base_stone}")
+        if random.random() < 0.25:
+            kind = SECTS.get(sect, {}).get("starter_kind", "丹方")
+            recipe_name = await pick_recipe_by_kind(kind, max_tier=2)
+            if recipe_name:
+                await inv_add(user_id, recipe_name, 1)
+                rewards.append(f"{recipe_name}×1")
+        return format_block("任务完成", ["奖励：" + "、".join(rewards)], ["提示：任务奖励周期为6小时。"])
+
+    if cmd == "炼制":
+        p = await get_player(user_id)
+        if not p:
+            return "你尚未入道，请先发送 .检测灵体。"
+        if not rest.strip():
+            return "用法：.炼制 配方名/目标物品*数量"
+        name, qty = parse_item_qty(rest)
+        qty = max(1, qty)
+        recipe_name = name if name in RECIPES else None
+        if not recipe_name:
+            matches = [k for k, v in RECIPES.items() if v["target"] == name]
+            if len(matches) == 1:
+                recipe_name = matches[0]
+            elif len(matches) > 1:
+                return "存在多个配方，请直接填写配方名。"
+        if not recipe_name:
+            return "未知配方或目标物品。可先用 .图鉴 丹方/武器方/护具方 查询。"
+        recipe = RECIPES[recipe_name]
+        have_recipe = await inv_get(user_id, recipe_name)
+        if have_recipe <= 0:
+            return "你尚未获得该配方，可通过宗门/任务/天道获取。"
+        tier, stage = p[4], p[5]
+        need_tier = recipe.get("tier", 0)
+        if tier < need_tier:
+            req = format_realm_requirement(need_tier, 1)
+            return f"境界不足，需达到 {req} 才可炼制。"
+        mats = recipe.get("mats", [])
+        if not mats:
+            return "配方缺少材料配置，请联系天道修正。"
+        missing = []
+        for item, amt in mats:
+            have = await inv_get(user_id, item)
+            need = amt * qty
+            if have < need:
+                missing.append(f"{item}缺{need - have}")
+        if missing:
+            return format_block("炼制失败", ["材料不足："] + missing)
+        target = recipe["target"]
+        cost = craft_cost(target, recipe["kind"]) * qty
+        if p[7] < cost:
+            return format_block("炼制失败", [f"灵石不足，需要 {cost} 灵石。"])
+        for item, amt in mats:
+            await inv_add(user_id, item, -amt * qty)
+        await set_player_field(user_id, stone=p[7] - cost)
+        await inv_add(user_id, target, qty)
+        return format_block(
+            "炼制成功",
+            [
+                f"配方：{recipe_name}",
+                f"产物：{target} × {qty}",
+                f"消耗灵石：{cost}",
+                f"材料：{format_materials([(item, amt * qty) for item, amt in mats])}",
+            ],
+        )
 
     if cmd == "榜单":
         category = rest.strip() or "灵石"
