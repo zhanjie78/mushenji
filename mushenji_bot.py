@@ -1337,8 +1337,12 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
                 delta = int(parts[-1])
             except ValueError:
                 return "数量必须是整数。"
-            if delta <= 0:
-                return "数量必须为正整数。"
+            if action == "设置限量":
+                if delta < 0:
+                    return "数量必须为非负整数。"
+            else:
+                if delta <= 0:
+                    return "数量必须为正整数。"
             item = " ".join(parts[:-1]).strip()
             if not item:
                 return "物品名不能为空。"
