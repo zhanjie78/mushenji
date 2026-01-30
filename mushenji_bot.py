@@ -541,6 +541,25 @@ TECH_PROJECTS = {
     "督造厂": {"max": 90000, "currency": "coin", "buff": "factory"},
 }
 
+SELL_PRICES = {
+    "灵木": {"coin": 40},
+    "星砂": {"coin": 80},
+    "玄铁矿": {"coin": 60},
+    "黑曜石": {"coin": 70},
+    "灵泉露": {"coin": 90},
+    "玄玉": {"coin": 100},
+    "赤金": {"coin": 120},
+    "天蚕丝": {"coin": 140},
+    "玄金": {"coin": 160},
+    "魂玉": {"coin": 200},
+    "龙鳞": {"stone": 15},
+    "四灵血": {"stone": 35},
+    "妖丹": {"stone": 12},
+    "异兽骨": {"stone": 50},
+    "破碎的瓦片": {"coin": 5},
+    "不知名的骨头": {"coin": 5},
+}
+
 
 ensure_recipes()
 ensure_recipe_materials()
@@ -889,6 +908,23 @@ async def limited_stock_set(item: str, qty: int) -> None:
             (item, max(0, qty)),
         )
         await db.commit()
+
+
+async def get_learned_recipes(user_id: int) -> list[tuple[str, dict]]:
+    items = await inv_get_all(user_id)
+    learned = []
+    for item, qty in items:
+        if qty > 0 and item in RECIPES:
+            learned.append((item, RECIPES[item]))
+    learned.sort(
+        key=lambda entry: (
+            entry[1].get("kind", ""),
+            entry[1].get("tier", 0),
+            entry[1].get("price", 0),
+            entry[0],
+        )
+    )
+    return learned
 
 
 async def get_learned_recipes(user_id: int) -> list[tuple[str, dict]]:
