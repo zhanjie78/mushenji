@@ -40,6 +40,8 @@ PASSIVE_GAIN = 1
 
 # 任务冷却（默认6小时）
 TASK_COOLDOWN = 6 * 60 * 60
+SECT_TASK_COOLDOWN = 8 * 60 * 60
+SECT_SIGNIN_COOLDOWN = 24 * 60 * 60
 
 # 闭关掉落
 TRAIN_LOOT_CHANCE = 0.12
@@ -393,6 +395,38 @@ SECTS = {
     "残老村": {"desc": "隐世炼器，守护之道", "starter_kind": "护具方"},
 }
 
+SECT_SHOP = {
+    "灵木": {"cost": 6, "qty": 3},
+    "星砂": {"cost": 6, "qty": 3},
+    "玄铁矿": {"cost": 8, "qty": 2},
+    "黑曜石": {"cost": 8, "qty": 2},
+    "灵泉露": {"cost": 10, "qty": 1},
+    "玄玉": {"cost": 12, "qty": 1},
+}
+
+
+def recipe_shop_cost(info: dict) -> int:
+    base = {"丹方": 40, "武器方": 55, "护具方": 55}.get(info.get("kind", ""), 50)
+    tier = info.get("tier", 0)
+    price = info.get("price", 0)
+    cost = max(base + tier * 20, int(price / 8) if price else base + tier * 20)
+    return cost
+
+
+def sect_shop_items(sect_name: str) -> dict[str, dict]:
+    shop = dict(SECT_SHOP)
+    sect_kind = SECTS.get(sect_name, {}).get("starter_kind")
+    limited_targets = set(LIMITED_WEAPONS) | set(LIMITED_ARMORS) | set(SUPER_RARE_PILLS)
+    for name, info in RECIPES.items():
+        target = info.get("target", "")
+        if target in limited_targets:
+            continue
+        cost = recipe_shop_cost(info)
+        if info.get("kind") == sect_kind:
+            cost = max(10, int(cost * 0.8))
+        shop[name] = {"cost": cost, "qty": 1, "kind": "配方"}
+    return shop
+
 RECIPE_MATERIALS = {
     "丹方": {
         0: [("星砂", 2), ("灵泉露", 1)],
@@ -488,7 +522,10 @@ CREATE TABLE IF NOT EXISTS player (
   last_pill_ts INTEGER DEFAULT 0,
 
   sect TEXT DEFAULT '',
-  task_ready_ts INTEGER DEFAULT 0
+  task_ready_ts INTEGER DEFAULT 0,
+  sect_contrib INTEGER DEFAULT 0,
+  sect_task_ready_ts INTEGER DEFAULT 0,
+  sect_signin_ts INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS inv (
@@ -515,6 +552,12 @@ async def db_init():
             await db.execute("ALTER TABLE player ADD COLUMN sect TEXT DEFAULT ''")
         if "task_ready_ts" not in cols:
             await db.execute("ALTER TABLE player ADD COLUMN task_ready_ts INTEGER DEFAULT 0")
+        if "sect_contrib" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN sect_contrib INTEGER DEFAULT 0")
+        if "sect_task_ready_ts" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN sect_task_ready_ts INTEGER DEFAULT 0")
+        if "sect_signin_ts" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN sect_signin_ts INTEGER DEFAULT 0")
         if LIMITED_ITEMS:
             await db.executemany(
                 "INSERT OR IGNORE INTO limited_stock(item, qty) VALUES(?, ?)",
@@ -605,6 +648,23 @@ async def limited_stock_set(item: str, qty: int) -> None:
             (item, max(0, qty)),
         )
         await db.commit()
+
+
+async def get_learned_recipes(user_id: int) -> list[tuple[str, dict]]:
+    items = await inv_get_all(user_id)
+    learned = []
+    for item, qty in items:
+        if qty > 0 and item in RECIPES:
+            learned.append((item, RECIPES[item]))
+    learned.sort(
+        key=lambda entry: (
+            entry[1].get("kind", ""),
+            entry[1].get("tier", 0),
+            entry[1].get("price", 0),
+            entry[0],
+        )
+    )
+    return learned
 
 
 async def limited_stock_add(item: str, delta: int) -> int:
@@ -976,6 +1036,42 @@ def format_leaderboard_lines(kind: str, rows: list[tuple]) -> list[str]:
             name = daohao or nick
             lines.append(f"{idx}. {name}｜境界：{realm_name(tier, stage)}｜修为：{exp}")
     return lines
+
+
+def build_sect_task() -> dict:
+    materials_pool = ["灵木", "星砂", "玄铁矿", "黑曜石", "灵泉露", "玄玉", "赤金"]
+    task_type = random.choice(["materials", "materials", "pill", "stone", "craft"])
+    if task_type == "stone":
+        cost = random.randint(120, 240)
+        return {
+            "title": "灵石供奉",
+            "requirements": [("灵石", cost)],
+            "contrib": random.randint(10, 18),
+            "stone_cost": cost,
+        }
+    if task_type == "pill":
+        pill_name = random.choice(list(PILLS.keys()))
+        qty = random.randint(1, 2)
+        return {
+            "title": "丹药供奉",
+            "requirements": [(pill_name, qty)],
+            "contrib": random.randint(12, 20),
+        }
+    if task_type == "craft":
+        mats = random.sample(materials_pool, k=2)
+        requirements = [(mats[0], 2), (mats[1], 2)]
+        return {
+            "title": "宗门养成·炼器助力",
+            "requirements": requirements,
+            "contrib": random.randint(14, 22),
+        }
+    mats = random.sample(materials_pool, k=2)
+    requirements = [(mats[0], random.randint(2, 3)), (mats[1], random.randint(1, 2))]
+    return {
+        "title": "宗门养成·资源供给",
+        "requirements": requirements,
+        "contrib": random.randint(10, 18),
+    }
 
 
 def format_block(title: str, body_lines: list[str], footer_lines: Optional[list[str]] = None) -> str:
@@ -1632,13 +1728,14 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
             [
                 ".检测灵体",
                 ".我的灵体",
+                ".我的配方",
                 ".闭关修炼",
                 ".深度闭关 / .查看闭关 / .强行出关",
                 ".储物袋",
                 ".服用 丹药名*数量",
                 ".炼制 配方名/目标物品*数量",
                 ".图鉴 丹药/武器/护具/材料/丹方/武器方/护具方/限量武器/限量防具/超稀有丹药/限量道具",
-                ".宗门 查看/加入 宗门名",
+                ".宗门 查看/加入 宗门名/信息/任务/签到/兑换",
                 ".任务",
                 ".榜单 灵石/修为",
                 ".传闻",
@@ -1672,6 +1769,8 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         cur_in_phase, cap_in_phase = exp_view_in_phase(p[6], p[4], p[5])
         sect = p[17] if len(p) > 17 else ""
         sect_line = f"宗门：{sect}" if sect else "宗门：暂无"
+        sect_contrib = p[19] if len(p) > 19 else 0
+        contrib_line = f"宗门贡献：{sect_contrib}"
         return format_block(
             "道友档案",
             [
@@ -1682,9 +1781,23 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
                 f"当前修为：{cur_in_phase}/{cap_in_phase}",
                 f"灵石：{p[7]}",
                 sect_line,
+                contrib_line,
             ],
         )
 
+
+    if cmd == "我的配方":
+        p = await get_player(user_id)
+        if not p:
+            return "你尚未入道，请先发送 .检测灵体。"
+        learned = await get_learned_recipes(user_id)
+        if not learned:
+            return format_block(
+                "我的配方",
+                ["目前尚未学会任何配方。", "提示：可通过宗门/任务/天道获取配方。"],
+            )
+        lines = [f"- {name}（{info['kind']}｜目标:{info['target']}）" for name, info in learned]
+        return format_block("我的配方", lines)
 
     if cmd == "闭关修炼":
         return await do_train(user_id)
@@ -1730,7 +1843,151 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
             lines = []
             for name, info in SECTS.items():
                 lines.append(f"{name}｜{info['desc']}")
-            return format_block("宗门一览", lines, ["用法：.宗门 加入 宗门名"])
+            return format_block("宗门一览", lines, ["用法：.宗门 加入 宗门名 / .宗门 信息 / .宗门 签到"])
+        if action in ("信息", "详情"):
+            p = await get_player(user_id)
+            if not p:
+                return "你尚未入道，请先发送 .检测灵体。"
+            sect_name = p[17] if len(p) > 17 else ""
+            if not sect_name:
+                return "你尚未加入宗门。可用：.宗门 查看"
+            info = SECTS.get(sect_name, {})
+            contrib = p[19] if len(p) > 19 else 0
+            sect_task_ready_ts = p[20] if len(p) > 20 else 0
+            now = int(time.time())
+            if now < sect_task_ready_ts:
+                left = sect_task_ready_ts - now
+                task_line = f"宗门任务：冷却中（{left//60}分{left%60}秒）"
+            else:
+                task_line = "宗门任务：可领取"
+            sect_signin_ts = p[21] if len(p) > 21 else 0
+            if now < sect_signin_ts + SECT_SIGNIN_COOLDOWN:
+                left = sect_signin_ts + SECT_SIGNIN_COOLDOWN - now
+                signin_line = f"宗门签到：冷却中（{left//3600}小时{left%3600//60}分）"
+            else:
+                signin_line = "宗门签到：可领取"
+            return format_block(
+                "宗门信息",
+                [
+                    f"宗门：{sect_name}",
+                    f"宗门描述：{info.get('desc', '暂无')}",
+                    f"宗门贡献：{contrib}",
+                    task_line,
+                    signin_line,
+                ],
+                ["提示：.宗门 任务 / .宗门 签到 / .宗门 兑换"],
+            )
+        if action.startswith("任务"):
+            p = await get_player(user_id)
+            if not p:
+                return "你尚未入道，请先发送 .检测灵体。"
+            sect_name = p[17] if len(p) > 17 else ""
+            if not sect_name:
+                return "你尚未加入宗门。可用：.宗门 加入 宗门名"
+            now = int(time.time())
+            sect_task_ready_ts = p[20] if len(p) > 20 else 0
+            if now < sect_task_ready_ts:
+                left = sect_task_ready_ts - now
+                return f"宗门任务冷却中，请在 {left//60}分{left%60}秒 后再试。"
+            task = build_sect_task()
+            missing = []
+            for item, qty in task["requirements"]:
+                if item == "灵石":
+                    if p[7] < qty:
+                        missing.append(f"灵石不足（需要 {qty}）")
+                    continue
+                have = await inv_get(user_id, item)
+                if have < qty:
+                    missing.append(f"{item}不足（需要 {qty}）")
+            if missing:
+                return format_block(
+                    "宗门任务",
+                    [f"任务：{task['title']}", "需求："] + [f"- {item} × {qty}" for item, qty in task["requirements"]],
+                    ["缺少：" + "、".join(missing), "可通过 .储物袋 查看库存。"],
+                )
+            for item, qty in task["requirements"]:
+                if item == "灵石":
+                    continue
+                await inv_add(user_id, item, -qty)
+            new_stone = p[7]
+            if task.get("stone_cost"):
+                new_stone -= task["stone_cost"]
+            contrib_gain = task["contrib"]
+            await set_player_field(
+                user_id,
+                stone=new_stone,
+                sect_contrib=(p[19] if len(p) > 19 else 0) + contrib_gain,
+                sect_task_ready_ts=now + SECT_TASK_COOLDOWN,
+            )
+            rewards = [f"宗门贡献×{contrib_gain}"]
+            return format_block(
+                "宗门任务完成",
+                [f"任务：{task['title']}", "提交：" + "、".join([f"{i}×{q}" for i, q in task["requirements"]]), "奖励：" + "、".join(rewards)],
+                ["提示：宗门任务冷却为8小时。"],
+            )
+        if action.startswith("签到"):
+            p = await get_player(user_id)
+            if not p:
+                return "你尚未入道，请先发送 .检测灵体。"
+            sect_name = p[17] if len(p) > 17 else ""
+            if not sect_name:
+                return "你尚未加入宗门。可用：.宗门 加入 宗门名"
+            now = int(time.time())
+            last_signin = p[21] if len(p) > 21 else 0
+            if now < last_signin + SECT_SIGNIN_COOLDOWN:
+                left = last_signin + SECT_SIGNIN_COOLDOWN - now
+                return f"宗门签到冷却中，请在 {left//3600}小时{left%3600//60}分 后再试。"
+            contrib_gain = random.randint(3, 6)
+            await set_player_field(
+                user_id,
+                sect_contrib=(p[19] if len(p) > 19 else 0) + contrib_gain,
+                sect_signin_ts=now,
+            )
+            return format_block("宗门签到", [f"获得宗门贡献×{contrib_gain}"], ["提示：每日可签到一次。"])
+        if action.startswith("兑换"):
+            p = await get_player(user_id)
+            if not p:
+                return "你尚未入道，请先发送 .检测灵体。"
+            sect_name = p[17] if len(p) > 17 else ""
+            if not sect_name:
+                return "你尚未加入宗门。可用：.宗门 加入 宗门名"
+            parts = action.split(maxsplit=1)
+            available = sect_shop_items(sect_name)
+            if len(parts) == 1:
+                recipe_count = sum(1 for info in available.values() if info.get("kind") == "配方")
+                return format_block(
+                    "宗门兑换",
+                    [
+                        f"配方可兑换数量：{recipe_count}",
+                        "查看配方：.宗门 兑换 配方",
+                        "查看材料：.宗门 兑换 材料",
+                    ],
+                    ["用法：.宗门 兑换 物品名"],
+                )
+            if parts[1].strip() in ("配方", "材料"):
+                category = parts[1].strip()
+                lines = []
+                for name, info in available.items():
+                    if category == "配方" and info.get("kind") != "配方":
+                        continue
+                    if category == "材料" and info.get("kind") == "配方":
+                        continue
+                    lines.append(f"{name}｜贡献:{info['cost']}｜数量:{info['qty']}")
+                title = f"宗门兑换（{category}）"
+                return format_block(title, lines or ["暂无可兑换物品。"], ["用法：.宗门 兑换 物品名"])
+            item_name = parts[1].strip()
+            if item_name not in available:
+                return "未知兑换物品。可用：.宗门 兑换"
+            info = available[item_name]
+            contrib = p[19] if len(p) > 19 else 0
+            if contrib < info["cost"]:
+                return f"宗门贡献不足，需要 {info['cost']} 点。"
+            await set_player_field(user_id, sect_contrib=contrib - info["cost"])
+            await inv_add(user_id, item_name, info["qty"])
+            return format_block(
+                "兑换成功",
+                [f"物品：{item_name} × {info['qty']}", f"消耗贡献：{info['cost']}"],
+            )
         if action.startswith("加入"):
             parts = action.split(maxsplit=1)
             if len(parts) != 2:
@@ -1758,7 +2015,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
                 rewards.append(f"{item}×{qty}")
             reward_line = "、".join(rewards) if rewards else "暂无"
             return format_block("宗门加入成功", [f"宗门：{sect_name}", f"入门奖励：{reward_line}"])
-        return "用法：.宗门 查看/加入 宗门名"
+        return "用法：.宗门 查看/加入 宗门名/信息/任务/签到/兑换"
 
     if cmd == "任务":
         p = await get_player(user_id)
@@ -1793,7 +2050,14 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         if not p:
             return "你尚未入道，请先发送 .检测灵体。"
         if not rest.strip():
-            return "用法：.炼制 配方名/目标物品*数量"
+            return format_block(
+                "炼制",
+                [
+                    "请输入阁下想要炼制的物品",
+                    "用法：.炼制 配方名/目标物品*数量",
+                    "提示：可用 .我的配方 查看已学配方。",
+                ],
+            )
         name, qty = parse_item_qty(rest)
         qty = max(1, qty)
         recipe_name = name if name in RECIPES else None
