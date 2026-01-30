@@ -5,6 +5,7 @@ import random
 import asyncio
 import math
 import html
+import json
 from dataclasses import dataclass
 from typing import Optional, Tuple, Dict
 
@@ -40,6 +41,15 @@ PASSIVE_GAIN = 1
 
 # 任务冷却（默认6小时）
 TASK_COOLDOWN = 6 * 60 * 60
+SECT_TASK_COOLDOWN = 8 * 60 * 60
+SECT_SIGNIN_COOLDOWN = 24 * 60 * 60
+DAO_MEN_QUIZ_COOLDOWN = 10 * 60
+DRAGON_BUFF_DURATION = 2 * 60 * 60
+GHOST_MARKET_COST = 500
+BLOCK_GATE_CD = 60 * 60
+TEST_DRUG_COOLDOWN = 24 * 60 * 60
+DAO_HEART_MAX = 20
+SOUL_DEBUFF_DURATION = 24 * 60 * 60
 
 # 闭关掉落
 TRAIN_LOOT_CHANCE = 0.12
@@ -90,6 +100,8 @@ PILLS: Dict[str, dict] = {
     "丹心丹": {"exp": 420, "min_tier": 1, "min_stage": 1, "price": 92, "desc": "丹心守气"},
     "沉香丹": {"exp": 180, "min_tier": 0, "min_stage": 2, "price": 32, "desc": "沉香宁神"},
     "金露丹": {"exp": 500, "min_tier": 1, "min_stage": 2, "price": 105, "desc": "金露润脉"},
+    "赤火灵丹": {"exp": 80, "min_tier": 0, "min_stage": 1, "price": 25, "desc": "烈火淬体，龙麒麟最爱"},
+    "古神血液滴": {"exp": 2000, "min_tier": 2, "min_stage": 1, "price": 1800, "desc": "古神血髓，炼体大补"},
 }
 
 SUPER_RARE_PILLS: Dict[str, dict] = {
@@ -235,6 +247,15 @@ ITEMS: Dict[str, dict] = {
     "龙血晶": {"rarity": "珍", "price": 280, "desc": "龙血精晶"},
     "天罡石": {"rarity": "珍", "price": 260, "desc": "天罡灵石"},
     "四灵血": {"rarity": "传", "price": 520, "desc": "四灵真血，炼器炼丹奇材"},
+    "杀猪刀": {"rarity": "奇", "price": 260, "desc": "屠宰旧刀，杀气暗藏"},
+    "佛珠": {"rarity": "奇", "price": 320, "desc": "佛门旧物，檀香未散"},
+    "异兽骨": {"rarity": "珍", "price": 240, "desc": "异兽骨骼，炼器奇材"},
+    "精铁": {"rarity": "玄", "price": 90, "desc": "粗炼铁胚，锻器之材"},
+    "火把": {"rarity": "凡", "price": 5, "desc": "昏黄火把，可照大墟"},
+    "破碎的瓦片": {"rarity": "凡", "price": 1, "desc": "鬼市淘来的破烂"},
+    "不知名的骨头": {"rarity": "凡", "price": 1, "desc": "谁也说不清的骨头"},
+    "剑丸粗胚": {"rarity": "珍", "price": 520, "desc": "剑丸初胚，待炼成形"},
+    "废铁": {"rarity": "凡", "price": 2, "desc": "炸炉后的废料"},
 }
 
 RECIPES: Dict[str, dict] = {
@@ -361,8 +382,8 @@ LINGTI_POOL = [
 
 LORE = {
     "世界观": [
-        "大墟风沙如海，残老村的灯火却从未熄灭。",
-        "延康皇朝方兴未艾，世间诸教暗流涌动。",
+        "大墟风沙如海，延康的灯火却从未熄灭。",
+        "延康变法方兴未艾，诸教暗流涌动。",
         "古神低语回荡在黑暗中，谁也说不清是福是祸。",
         "太虚深处偶现神桥残影，疑是上古遗泽。",
     ],
@@ -371,9 +392,10 @@ LORE = {
         "有人自称来自延康，口口声声要重塑旧日秩序。",
     ],
     "势力": [
-        "延康皇朝",
-        "天道圣教",
-        "残老村",
+        "延康",
+        "道门",
+        "天魔教",
+        "大雷音寺",
     ],
     "地名": [
         "大墟",
@@ -388,10 +410,77 @@ LORE = {
 }
 
 SECTS = {
-    "延康皇朝": {"desc": "军阵炼体，重器道统", "starter_kind": "武器方"},
-    "天道圣教": {"desc": "丹道传承，护道镇魂", "starter_kind": "丹方"},
-    "残老村": {"desc": "隐世炼器，守护之道", "starter_kind": "护具方"},
+    "延康": {
+        "desc": "国师变法，有教无类。新手默认归属。",
+        "req_tier": 0,
+        "req_stone": 0,
+        "type": "starter",
+        "starter_kind": "武器方",
+    },
+    "道门": {
+        "desc": "术数穷理。入门需交千金，或解出算题。",
+        "req_tier": 2,
+        "req_stone": 1000,
+        "waiver_cmd": "解题",
+        "join_msg": "你通过了考核，道主微微颔首：'数算可通神'。",
+        "starter_kind": "丹方",
+    },
+    "天魔教": {
+        "desc": "率性而为。入门看缘分（或杀气）。",
+        "req_tier": 1,
+        "req_stone": 500,
+        "waiver_item": "杀猪刀",
+        "join_msg": "你亮出杀猪刀，教主大笑：'好刀法！你是我们兄弟了！'",
+        "starter_kind": "武器方",
+    },
+    "大雷音寺": {
+        "desc": "佛门圣地。不仅要钱，还要缘。",
+        "req_tier": 3,
+        "req_stone": 2000,
+        "waiver_item": "佛珠",
+        "join_msg": "你献上香火钱与佛珠，长老颔首：'你与我佛有缘'。",
+        "starter_kind": "护具方",
+    },
 }
+
+SECT_SHOP = {
+    "灵木": {"cost": 6, "qty": 3},
+    "星砂": {"cost": 6, "qty": 3},
+    "玄铁矿": {"cost": 8, "qty": 2},
+    "黑曜石": {"cost": 8, "qty": 2},
+    "灵泉露": {"cost": 10, "qty": 1},
+    "玄玉": {"cost": 12, "qty": 1},
+    "火把": {"cost": 3, "qty": 1, "kind": "道具"},
+    "赤火灵丹": {"cost": 20, "qty": 1, "kind": "丹药"},
+    "杀猪刀": {"cost": 80, "qty": 1, "kind": "信物"},
+    "佛珠": {"cost": 120, "qty": 1, "kind": "信物"},
+    "杀猪刀图纸": {"cost": 35, "qty": 1, "kind": "图纸"},
+    "青锋剑图纸": {"cost": 35, "qty": 1, "kind": "图纸"},
+    "青木杖图纸": {"cost": 35, "qty": 1, "kind": "图纸"},
+}
+
+
+def recipe_shop_cost(info: dict) -> int:
+    base = {"丹方": 40, "武器方": 55, "护具方": 55}.get(info.get("kind", ""), 50)
+    tier = info.get("tier", 0)
+    price = info.get("price", 0)
+    cost = max(base + tier * 20, int(price / 8) if price else base + tier * 20)
+    return cost
+
+
+def sect_shop_items(sect_name: str) -> dict[str, dict]:
+    shop = dict(SECT_SHOP)
+    sect_kind = SECTS.get(sect_name, {}).get("starter_kind")
+    limited_targets = set(LIMITED_WEAPONS) | set(LIMITED_ARMORS) | set(SUPER_RARE_PILLS)
+    for name, info in RECIPES.items():
+        target = info.get("target", "")
+        if target in limited_targets:
+            continue
+        cost = recipe_shop_cost(info)
+        if info.get("kind") == sect_kind:
+            cost = max(10, int(cost * 0.8))
+        shop[name] = {"cost": cost, "qty": 1, "kind": "配方"}
+    return shop
 
 RECIPE_MATERIALS = {
     "丹方": {
@@ -418,6 +507,38 @@ RECIPE_MATERIALS = {
         4: [("玄星铁", 2), ("凤羽", 1)],
         5: [("龙鳞", 2), ("凤羽", 1)],
     },
+}
+
+SELL_PRICES = {
+    "灵木": {"coin": 40},
+    "星砂": {"coin": 80},
+    "玄铁矿": {"coin": 60},
+    "黑曜石": {"coin": 70},
+    "灵泉露": {"coin": 90},
+    "玄玉": {"coin": 100},
+    "赤金": {"coin": 120},
+    "天蚕丝": {"coin": 140},
+    "玄金": {"coin": 160},
+    "魂玉": {"coin": 200},
+    "龙鳞": {"stone": 15},
+    "四灵血": {"stone": 35},
+    "妖丹": {"stone": 12},
+    "异兽骨": {"stone": 50},
+    "破碎的瓦片": {"coin": 5},
+    "不知名的骨头": {"coin": 5},
+    "废铁": {"coin": 2},
+}
+
+FORGE_BASE_STATS = {
+    "杀猪刀": {"atk": 18},
+    "青锋剑": {"atk": 20},
+    "青木杖": {"atk": 14},
+}
+
+TECH_PROJECTS = {
+    "传送阵": {"max": 100000, "currency": "coin", "buff": "teleport"},
+    "太医馆": {"max": 80000, "currency": "coin", "buff": "hospital"},
+    "督造厂": {"max": 90000, "currency": "coin", "buff": "factory"},
 }
 
 
@@ -488,7 +609,30 @@ CREATE TABLE IF NOT EXISTS player (
   last_pill_ts INTEGER DEFAULT 0,
 
   sect TEXT DEFAULT '',
-  task_ready_ts INTEGER DEFAULT 0
+  task_ready_ts INTEGER DEFAULT 0,
+  sect_contrib INTEGER DEFAULT 0,
+  sect_task_ready_ts INTEGER DEFAULT 0,
+  sect_signin_ts INTEGER DEFAULT 0,
+  coin INTEGER DEFAULT 0,
+  location TEXT DEFAULT '延康',
+  genius INTEGER DEFAULT 0,
+  dao_waiver INTEGER DEFAULT 0,
+  dao_waiver_answer INTEGER DEFAULT 0,
+  dao_waiver_ts INTEGER DEFAULT 0,
+  dragon_fed_until INTEGER DEFAULT 0,
+  fame INTEGER DEFAULT 0,
+  title_debuff_until INTEGER DEFAULT 0,
+  title_debuff_name TEXT DEFAULT '',
+  max_hp INTEGER DEFAULT 100,
+  cur_hp INTEGER DEFAULT 100,
+  test_drug_ts INTEGER DEFAULT 0,
+  temp_lingti TEXT DEFAULT '',
+  temp_lingti_ts INTEGER DEFAULT 0,
+  status TEXT DEFAULT 'ALIVE',
+  soul_debuff_until INTEGER DEFAULT 0,
+  dao_heart INTEGER DEFAULT 0,
+  last_train_ts INTEGER DEFAULT 0,
+  last_active_ts INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS inv (
@@ -501,6 +645,28 @@ CREATE TABLE IF NOT EXISTS inv (
 CREATE TABLE IF NOT EXISTS limited_stock (
   item TEXT PRIMARY KEY,
   qty INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS recipes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT UNIQUE,
+  materials_json TEXT,
+  result_item TEXT
+);
+
+CREATE TABLE IF NOT EXISTS equipment (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner_id INTEGER,
+  name TEXT,
+  stats_json TEXT,
+  quality TEXT
+);
+
+CREATE TABLE IF NOT EXISTS server_tech (
+  tech_name TEXT PRIMARY KEY,
+  current_progress INTEGER DEFAULT 0,
+  max_progress INTEGER DEFAULT 0,
+  level INTEGER DEFAULT 0
 );
 """
 
@@ -515,10 +681,71 @@ async def db_init():
             await db.execute("ALTER TABLE player ADD COLUMN sect TEXT DEFAULT ''")
         if "task_ready_ts" not in cols:
             await db.execute("ALTER TABLE player ADD COLUMN task_ready_ts INTEGER DEFAULT 0")
+        if "sect_contrib" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN sect_contrib INTEGER DEFAULT 0")
+        if "sect_task_ready_ts" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN sect_task_ready_ts INTEGER DEFAULT 0")
+        if "sect_signin_ts" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN sect_signin_ts INTEGER DEFAULT 0")
+        if "coin" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN coin INTEGER DEFAULT 0")
+        if "location" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN location TEXT DEFAULT '延康'")
+        if "genius" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN genius INTEGER DEFAULT 0")
+        if "dao_waiver" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN dao_waiver INTEGER DEFAULT 0")
+        if "dao_waiver_answer" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN dao_waiver_answer INTEGER DEFAULT 0")
+        if "dao_waiver_ts" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN dao_waiver_ts INTEGER DEFAULT 0")
+        if "dragon_fed_until" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN dragon_fed_until INTEGER DEFAULT 0")
+        if "fame" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN fame INTEGER DEFAULT 0")
+        if "title_debuff_until" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN title_debuff_until INTEGER DEFAULT 0")
+        if "title_debuff_name" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN title_debuff_name TEXT DEFAULT ''")
+        if "max_hp" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN max_hp INTEGER DEFAULT 100")
+        if "cur_hp" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN cur_hp INTEGER DEFAULT 100")
+        if "test_drug_ts" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN test_drug_ts INTEGER DEFAULT 0")
+        if "temp_lingti" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN temp_lingti TEXT DEFAULT ''")
+        if "temp_lingti_ts" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN temp_lingti_ts INTEGER DEFAULT 0")
+        if "status" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN status TEXT DEFAULT 'ALIVE'")
+        if "soul_debuff_until" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN soul_debuff_until INTEGER DEFAULT 0")
+        if "dao_heart" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN dao_heart INTEGER DEFAULT 0")
+        if "last_train_ts" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN last_train_ts INTEGER DEFAULT 0")
+        if "last_active_ts" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN last_active_ts INTEGER DEFAULT 0")
         if LIMITED_ITEMS:
             await db.executemany(
                 "INSERT OR IGNORE INTO limited_stock(item, qty) VALUES(?, ?)",
                 [(name, qty) for name, qty in LIMITED_ITEMS.items()],
+            )
+        await db.executemany(
+            "INSERT OR IGNORE INTO server_tech(tech_name, current_progress, max_progress, level) VALUES(?, 0, ?, 0)",
+            [(name, info["max"]) for name, info in TECH_PROJECTS.items()],
+        )
+        cur = await db.execute("SELECT COUNT(*) FROM recipes")
+        count = (await cur.fetchone())[0]
+        if count == 0:
+            await db.executemany(
+                "INSERT INTO recipes(name, materials_json, result_item) VALUES(?, ?, ?)",
+                [
+                    ("杀猪刀图纸", json.dumps([["玄铁矿", 3], ["黑曜石", 1]]), "杀猪刀"),
+                    ("青锋剑图纸", json.dumps([["玄铁矿", 2], ["灵木", 2]]), "青锋剑"),
+                    ("青木杖图纸", json.dumps([["灵木", 3], ["玄玉", 1]]), "青木杖"),
+                ],
             )
         await db.commit()
 
@@ -533,8 +760,9 @@ async def get_player(user_id: int):
 async def create_player(user_id: int, nick: str, daohao: str, lingti: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT INTO player(user_id,nick,daohao,lingti,tier,stage,exp,stone) VALUES(?,?,?,?,0,1,0,0)",
-            (user_id, nick, daohao, lingti),
+            "INSERT INTO player(user_id,nick,daohao,lingti,tier,stage,exp,stone,sect,coin,location) "
+            "VALUES(?,?,?,?,0,1,0,?,?,?,?)",
+            (user_id, nick, daohao, lingti, 10, "延康", 100, "延康"),
         )
         # 初始发一点丹药用于测试
         await db.execute("INSERT OR IGNORE INTO inv(user_id,item,qty) VALUES(?,?,?)", (user_id, "聚气丹", 3))
@@ -553,9 +781,65 @@ async def set_player_field(user_id: int, **fields):
 
 
 async def add_exp(user_id: int, delta: int):
+    if delta > 0:
+        p = await get_player(user_id)
+        if p and len(p) > 24 and p[24]:
+            delta = max(1, int(delta * 0.8))
+        if p and len(p) > 38 and p[38] and time.time() < p[38]:
+            delta = max(1, int(delta * 0.5))
+        if p and len(p) > 39:
+            dao_heart = min(DAO_HEART_MAX, p[39])
+            if dao_heart > 0:
+                delta = max(1, int(delta * (1 + dao_heart / 100)))
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE player SET exp = exp + ? WHERE user_id=?", (delta, user_id))
         await db.commit()
+
+
+def dragon_active(p: tuple, now: int) -> bool:
+    if len(p) > 28:
+        return now < p[28]
+    return False
+
+
+def temp_lingti_active(p: tuple, now: int) -> str:
+    if len(p) > 35 and p[35] and now < p[36]:
+        return p[35]
+    return ""
+
+
+def is_ghost(p: tuple) -> bool:
+    return len(p) > 37 and p[37] == "GHOST"
+
+
+async def get_recipe_by_name(name: str) -> Optional[tuple]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT name, materials_json, result_item FROM recipes WHERE name=?", (name,))
+        return await cur.fetchone()
+
+
+async def insert_equipment(owner_id: int, name: str, stats: dict, quality: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO equipment(owner_id, name, stats_json, quality) VALUES(?, ?, ?, ?)",
+            (owner_id, name, json.dumps(stats), quality),
+        )
+        await db.commit()
+
+
+async def get_tech_status(name: str) -> Optional[tuple]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT tech_name, current_progress, max_progress, level FROM server_tech WHERE tech_name=?",
+            (name,),
+        )
+        return await cur.fetchone()
+
+
+def get_server_buff(rows: Optional[tuple]) -> int:
+    if not rows:
+        return 0
+    return rows[3]
 
 
 async def inv_get_all(user_id: int):
@@ -605,6 +889,23 @@ async def limited_stock_set(item: str, qty: int) -> None:
             (item, max(0, qty)),
         )
         await db.commit()
+
+
+async def get_learned_recipes(user_id: int) -> list[tuple[str, dict]]:
+    items = await inv_get_all(user_id)
+    learned = []
+    for item, qty in items:
+        if qty > 0 and item in RECIPES:
+            learned.append((item, RECIPES[item]))
+    learned.sort(
+        key=lambda entry: (
+            entry[1].get("kind", ""),
+            entry[1].get("tier", 0),
+            entry[1].get("price", 0),
+            entry[0],
+        )
+    )
+    return learned
 
 
 async def limited_stock_add(item: str, delta: int) -> int:
@@ -978,6 +1279,42 @@ def format_leaderboard_lines(kind: str, rows: list[tuple]) -> list[str]:
     return lines
 
 
+def build_sect_task() -> dict:
+    materials_pool = ["灵木", "星砂", "玄铁矿", "黑曜石", "灵泉露", "玄玉", "赤金"]
+    task_type = random.choice(["materials", "materials", "pill", "stone", "craft"])
+    if task_type == "stone":
+        cost = random.randint(120, 240)
+        return {
+            "title": "灵石供奉",
+            "requirements": [("灵石", cost)],
+            "contrib": random.randint(10, 18),
+            "stone_cost": cost,
+        }
+    if task_type == "pill":
+        pill_name = random.choice(list(PILLS.keys()))
+        qty = random.randint(1, 2)
+        return {
+            "title": "丹药供奉",
+            "requirements": [(pill_name, qty)],
+            "contrib": random.randint(12, 20),
+        }
+    if task_type == "craft":
+        mats = random.sample(materials_pool, k=2)
+        requirements = [(mats[0], 2), (mats[1], 2)]
+        return {
+            "title": "宗门养成·炼器助力",
+            "requirements": requirements,
+            "contrib": random.randint(14, 22),
+        }
+    mats = random.sample(materials_pool, k=2)
+    requirements = [(mats[0], random.randint(2, 3)), (mats[1], random.randint(1, 2))]
+    return {
+        "title": "宗门养成·资源供给",
+        "requirements": requirements,
+        "contrib": random.randint(10, 18),
+    }
+
+
 def format_block(title: str, body_lines: list[str], footer_lines: Optional[list[str]] = None) -> str:
     lines = [f"【<b>{html.escape(title)}</b>】"]
     if body_lines:
@@ -1002,8 +1339,17 @@ async def do_train(user_id: int) -> str:
     p = await get_player(user_id)
     if not p:
         return "你尚未入道，请先发送 .检测灵体。"
+    if is_ghost(p):
+        return "你已身处幽都，无法闭关。可用 .交易 土伯 或 .偷渡 复活。"
+    if len(p) > 33 and p[33] <= 0:
+        await set_player_field(user_id, status="GHOST")
+        return "你已身死魂散，进入幽都。可用 .交易 土伯 或 .偷渡 复活。"
 
     now = int(time.time())
+    last_train_ts = p[40] if len(p) > 40 else 0
+    dao_heart = p[39] if len(p) > 39 else 0
+    if last_train_ts and now - last_train_ts > 24 * 60 * 60:
+        dao_heart = 0
     train_ready_ts = p[8]
     if now < train_ready_ts:
         left = train_ready_ts - now
@@ -1052,7 +1398,17 @@ async def do_train(user_id: int) -> str:
 
     # 设置下一次随机冷却 10-15分钟（模板描述）
     cd = random.randint(TRAIN_CD_MIN, TRAIN_CD_MAX)
-    await set_player_field(user_id, train_ready_ts=now + cd)
+    if dragon_active(p, now):
+        cd = max(60, int(cd * 0.7))
+    if now - last_train_ts >= 24 * 60 * 60:
+        dao_heart = min(DAO_HEART_MAX, dao_heart + 1)
+    await set_player_field(
+        user_id,
+        train_ready_ts=now + cd,
+        dao_heart=dao_heart,
+        last_train_ts=now,
+        last_active_ts=now,
+    )
 
     p2 = await get_player(user_id)
     tier2, stage2, exp2 = p2[4], p2[5], p2[6]
@@ -1321,6 +1677,10 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         return None
     user_id = msg.from_user.id
     nick = msg.from_user.full_name or "道友"
+    now = int(time.time())
+    existing = await get_player(user_id)
+    if existing:
+        await set_player_field(user_id, last_active_ts=now)
 
     if cmd == "天道":
         if not is_admin(user_id):
@@ -1632,13 +1992,25 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
             [
                 ".检测灵体",
                 ".我的灵体",
+                ".我的配方",
                 ".闭关修炼",
                 ".深度闭关 / .查看闭关 / .强行出关",
                 ".储物袋",
+                ".前往 延康/大墟/宗门名",
+                ".传送 大墟",
+                ".出售 物品名*数量",
+                ".喂食 赤火灵丹/灵石*数量",
+                ".鬼市 淘宝",
+                ".堵门 宗门名",
+                ".试药",
+                ".锻造 图纸名 [自定义名]",
+                ".捐赠 项目 [铜钱/灵石] 数量",
+                ".交易 土伯 / .偷渡 / .飘荡",
                 ".服用 丹药名*数量",
                 ".炼制 配方名/目标物品*数量",
                 ".图鉴 丹药/武器/护具/材料/丹方/武器方/护具方/限量武器/限量防具/超稀有丹药/限量道具",
-                ".宗门 查看/加入 宗门名",
+                ".道门 解题 [答案]",
+                ".宗门 查看/加入 宗门名/信息/任务/签到/兑换",
                 ".任务",
                 ".榜单 灵石/修为",
                 ".传闻",
@@ -1653,7 +2025,10 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
             return "你已检测过灵体，可发送 .我的灵体 查看档案。"
         daohao = gen_daohao()
         lingti = weighted_choice(LINGTI_POOL)
+        genius = 1 if random.random() < 0.05 else 0
         await create_player(user_id, nick, daohao, lingti)
+        if genius:
+            await set_player_field(user_id, genius=1)
         return format_block(
             "检测灵体",
             [
@@ -1661,8 +2036,13 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
                 f"先天道灵体：{lingti}",
                 f"当前境界：{realm_name(0,1)}",
                 "身处大墟，万象皆险。",
+                "初始资助：铜钱100、灵石10。",
             ],
-            ["提示：可发送 .闭关修炼 开始修行。"],
+            (
+                ["提示：可发送 .闭关修炼 开始修行。"]
+                if not genius
+                else ["检测灵石炸裂！虽然你修炼极慢，但各大宗门都争抢着要你这样的怪胎！(无视宗门境界门槛)"]
+            ),
         )
 
     if cmd == "我的灵体":
@@ -1672,6 +2052,27 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         cur_in_phase, cap_in_phase = exp_view_in_phase(p[6], p[4], p[5])
         sect = p[17] if len(p) > 17 else ""
         sect_line = f"宗门：{sect}" if sect else "宗门：暂无"
+        sect_contrib = p[19] if len(p) > 19 else 0
+        contrib_line = f"宗门贡献：{sect_contrib}"
+        coin = p[22] if len(p) > 22 else 0
+        location = p[23] if len(p) > 23 else "未知"
+        genius_line = "怪胎体质：是" if len(p) > 24 and p[24] else "怪胎体质：否"
+        fame = p[29] if len(p) > 29 else 0
+        title_until = p[30] if len(p) > 30 else 0
+        title_name = p[31] if len(p) > 31 else ""
+        max_hp = p[32] if len(p) > 32 else 100
+        cur_hp = p[33] if len(p) > 33 else max_hp
+        temp_lingti = temp_lingti_active(p, int(time.time()))
+        dragon_line = "龙麒麟：就绪" if dragon_active(p, int(time.time())) else "龙麒麟：沉睡"
+        dao_heart = p[39] if len(p) > 39 else 0
+        soul_debuff = p[38] if len(p) > 38 and int(time.time()) < p[38]
+        dao_line = f"道心：{dao_heart}（{min(dao_heart, DAO_HEART_MAX)}%）"
+        soul_line = "魂伤：是" if soul_debuff else "魂伤：否"
+        status_line = f"状态：{'幽都' if is_ghost(p) else '阳世'}"
+        if title_until and int(time.time()) < title_until and title_name:
+            title_line = f"称号：{title_name}"
+        else:
+            title_line = "称号：暂无"
         return format_block(
             "道友档案",
             [
@@ -1681,10 +2082,35 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
                 f"境界：{realm_name(p[4], p[5])}",
                 f"当前修为：{cur_in_phase}/{cap_in_phase}",
                 f"灵石：{p[7]}",
+                f"铜钱：{coin}",
+                f"所在地：{location}",
                 sect_line,
+                contrib_line,
+                f"声望：{fame}",
+                f"生命：{cur_hp}/{max_hp}",
+                f"临时灵体：{temp_lingti or '无'}",
+                dragon_line,
+                title_line,
+                dao_line,
+                soul_line,
+                status_line,
+                genius_line,
             ],
         )
 
+
+    if cmd == "我的配方":
+        p = await get_player(user_id)
+        if not p:
+            return "你尚未入道，请先发送 .检测灵体。"
+        learned = await get_learned_recipes(user_id)
+        if not learned:
+            return format_block(
+                "我的配方",
+                ["目前尚未学会任何配方。", "提示：可通过宗门/任务/天道获取配方。"],
+            )
+        lines = [f"- {name}（{info['kind']}｜目标:{info['target']}）" for name, info in learned]
+        return format_block("我的配方", lines)
 
     if cmd == "闭关修炼":
         return await do_train(user_id)
@@ -1711,6 +2137,278 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
                 lines.append(f"- {it} × {qty}")
         return format_block("储物袋", lines)
 
+    if cmd == "前往":
+        p = await get_player(user_id)
+        if not p:
+            return "你尚未入道，请先发送 .检测灵体。"
+        if is_ghost(p):
+            return "你已身处幽都，无法移动。可用 .交易 土伯 或 .偷渡 复活。"
+        target = rest.strip()
+        if not target:
+            return "用法：.前往 延康/大墟/宗门名"
+        if target not in ("延康", "大墟") and target not in SECTS:
+            return "未知目的地。可用：延康/大墟/宗门名"
+        now = int(time.time())
+        if target == "大墟" and not dragon_active(p, now):
+            have = await inv_get(user_id, "火把")
+            if have <= 0:
+                return "前往大墟需要火把。可在延康任务或宗门兑换获取。"
+            await inv_add(user_id, "火把", -1)
+        await set_player_field(user_id, location=target)
+        return f"你已前往 {target}。"
+
+    if cmd == "传送":
+        p = await get_player(user_id)
+        if not p:
+            return "你尚未入道，请先发送 .检测灵体。"
+        if is_ghost(p):
+            return "你已身处幽都，无法传送。"
+        target = rest.strip()
+        if target != "大墟":
+            return "用法：.传送 大墟"
+        tech = await get_tech_status("传送阵")
+        if get_server_buff(tech) < 1:
+            return "传送阵尚未建成，无法传送。"
+        await set_player_field(user_id, location="大墟")
+        return "传送阵启动，你已瞬移至大墟。"
+
+    if cmd == "出售":
+        p = await get_player(user_id)
+        if not p:
+            return "你尚未入道，请先发送 .检测灵体。"
+        if is_ghost(p):
+            return "你已身处幽都，无法交易。"
+        if not rest.strip():
+            return "用法：.出售 物品名*数量"
+        name, qty = parse_item_qty(rest)
+        qty = max(1, qty)
+        if name not in SELL_PRICES:
+            return "该物品不可出售。可出售：常见材料与部分异兽战利品。"
+        have = await inv_get(user_id, name)
+        if have < qty:
+            return f"储物袋中不足（拥有 {have}）。"
+        price = SELL_PRICES[name]
+        coin_gain = price.get("coin", 0) * qty
+        stone_gain = price.get("stone", 0) * qty
+        await inv_add(user_id, name, -qty)
+        await set_player_field(
+            user_id,
+            coin=(p[22] if len(p) > 22 else 0) + coin_gain,
+            stone=p[7] + stone_gain,
+        )
+        reward_parts = []
+        if coin_gain:
+            reward_parts.append(f"铜钱×{coin_gain}")
+        if stone_gain:
+            reward_parts.append(f"灵石×{stone_gain}")
+        return format_block("出售完成", [f"出售：{name}×{qty}", "获得：" + "、".join(reward_parts)])
+
+    if cmd == "堵门":
+        p = await get_player(user_id)
+        if not p:
+            return "你尚未入道，请先发送 .检测灵体。"
+        if is_ghost(p):
+            return "你已身处幽都，无法堵门。"
+        sect_name = rest.strip()
+        if not sect_name:
+            return "用法：.堵门 宗门名"
+        if sect_name not in SECTS:
+            return "未知宗门。可用：道门/天魔教/大雷音寺/延康"
+        if p[17] == sect_name:
+            return "不可堵自己的宗门。"
+        location = p[23] if len(p) > 23 else ""
+        if location not in ("延康", sect_name):
+            return "你需在延康或目标宗门所在地才能堵门。"
+        now = int(time.time())
+        debuff_until = p[30] if len(p) > 30 else 0
+        if debuff_until and now < debuff_until:
+            left = debuff_until - now
+            return f"你还在堵门败将的阴影中，{left//60}分{left%60}秒 后再试。"
+        npc_tier = SECTS[sect_name].get("req_tier", max(0, p[4] - 1))
+        npc_score = npc_tier + random.randint(0, 6)
+        player_score = p[4] + random.randint(0, 6)
+        header = f"玩家 {p[1]} 扛着石碑堵在了 {sect_name} 门口，扬言要打十个！"
+        if player_score >= npc_score:
+            fame_gain = 50
+            await set_player_field(user_id, fame=(p[29] if len(p) > 29 else 0) + fame_gain)
+            return f"{header}\n宗门派出弟子迎战，你大胜！获得声望×{fame_gain}。"
+        await set_player_field(
+            user_id,
+            title_debuff_until=now + BLOCK_GATE_CD,
+            title_debuff_name="被堵门的手下败将",
+        )
+        return f"{header}\n你被宗门弟子击退，获得称号：被堵门的手下败将（1小时）。"
+
+    if cmd == "试药":
+        p = await get_player(user_id)
+        if not p:
+            return "你尚未入道，请先发送 .检测灵体。"
+        if is_ghost(p):
+            return "你已身处幽都，无法试药。"
+        location = p[23] if len(p) > 23 else ""
+        if location != "延康":
+            return "试药必须在延康进行。"
+        now = int(time.time())
+        last_ts = p[34] if len(p) > 34 else 0
+        if now < last_ts + TEST_DRUG_COOLDOWN:
+            left = last_ts + TEST_DRUG_COOLDOWN - now
+            return f"试药冷却中，请在 {left//3600}小时{left%3600//60}分 后再试。"
+        roll = random.randint(1, 100)
+        max_hp = p[32] if len(p) > 32 else 100
+        cur_hp = p[33] if len(p) > 33 else max_hp
+        if roll <= 20:
+            await set_player_field(
+                user_id,
+                cur_hp=1,
+                train_ready_ts=now + 60 * 60,
+                test_drug_ts=now,
+            )
+            return "脸都绿了！药有毒！你生命降到1，1小时内无法闭关。"
+        if roll <= 50:
+            await set_player_field(user_id, test_drug_ts=now)
+            return "味道有点甜，没啥反应。"
+        if roll <= 90:
+            await set_player_field(
+                user_id,
+                max_hp=max_hp + 10,
+                cur_hp=cur_hp + 10,
+                test_drug_ts=now,
+            )
+            return "药力洗刷全身，你的皮膜更加坚韧了！最大生命+10。"
+        temp = random.choice(["白虎之体", "玄武之体", "朱雀之体"])
+        await set_player_field(
+            user_id,
+            temp_lingti=temp,
+            temp_lingti_ts=now + 24 * 60 * 60,
+            test_drug_ts=now,
+        )
+        return f"你感觉体内充满了神兽之力！临时灵体：{temp}（24小时）。"
+
+    if cmd == "锻造":
+        p = await get_player(user_id)
+        if not p:
+            return "你尚未入道，请先发送 .检测灵体。"
+        if is_ghost(p):
+            return "你已身处幽都，无法锻造。"
+        location = p[23] if len(p) > 23 else ""
+        if location != "延康":
+            return "锻造必须在延康进行。"
+        if not rest.strip():
+            return "用法：.锻造 图纸名 [自定义名]"
+        parts = rest.split(maxsplit=1)
+        recipe_name = parts[0].strip()
+        custom_name = parts[1].strip() if len(parts) > 1 else ""
+        recipe = await get_recipe_by_name(recipe_name)
+        if not recipe:
+            return "未知图纸。"
+        _, mats_json, result_item = recipe
+        materials = json.loads(mats_json)
+        missing = []
+        for item, qty in materials:
+            have = await inv_get(user_id, item)
+            if have < qty:
+                missing.append(f"{item}不足（需要 {qty}）")
+        if missing:
+            return format_block("锻造失败", ["材料不足："] + missing)
+        for item, qty in materials:
+            await inv_add(user_id, item, -qty)
+        roll = random.randint(1, 100)
+        factory = await get_tech_status("督造厂")
+        fail_threshold = 10
+        if get_server_buff(factory) >= 1:
+            fail_threshold = 5
+        if roll <= fail_threshold:
+            await inv_add(user_id, "废铁", 1)
+            return "炉子炸了！材料变成了废渣。你只捡回了一块废铁。"
+        base_stats = FORGE_BASE_STATS.get(result_item, {"atk": 10})
+        quality = "普通"
+        multiplier = 1.0
+        effect = ""
+        item_name = f"普通的{result_item}"
+        if roll <= 60:
+            quality = "普通"
+        elif roll <= 90:
+            quality = "稀有"
+            multiplier = 1.2
+            item_name = f"锋利的{result_item}"
+        elif roll <= 99:
+            quality = "史诗"
+            multiplier = 1.5
+            effect = "流血"
+            item_name = f"饮血·{result_item}"
+        else:
+            quality = "传说"
+            multiplier = 2.0
+            if custom_name:
+                item_name = custom_name
+            else:
+                item_name = f"绝世神兵·{result_item}"
+        stats = {k: int(v * multiplier) for k, v in base_stats.items()}
+        if effect:
+            stats["特效"] = effect
+        await insert_equipment(user_id, item_name, stats, quality)
+        announce = ""
+        if roll == 100:
+            announce = f"\n天降异象！{p[1]} 锻造出了绝世神兵！"
+        return f"哑巴比划了半天，示意你火候到了... 叮！\n锻造结果：{item_name}（{quality}）{announce}"
+
+    if cmd == "捐赠":
+        p = await get_player(user_id)
+        if not p:
+            return "你尚未入道，请先发送 .检测灵体。"
+        if is_ghost(p):
+            return "你已身处幽都，无法捐赠。"
+        if not rest.strip():
+            return "用法：.捐赠 项目 [铜钱/灵石] 数量"
+        parts = rest.split()
+        if len(parts) == 2:
+            project, qty_str = parts
+            currency = "铜钱"
+        elif len(parts) == 3:
+            project, currency, qty_str = parts
+        else:
+            return "用法：.捐赠 项目 [铜钱/灵石] 数量"
+        if project not in TECH_PROJECTS:
+            return "未知项目。可用：传送阵/太医馆/督造厂"
+        try:
+            qty = int(qty_str)
+        except ValueError:
+            return "数量必须为整数。"
+        if qty <= 0:
+            return "数量必须为正整数。"
+        if currency not in ("铜钱", "灵石"):
+            return "物资仅支持：铜钱/灵石"
+        if currency == "铜钱":
+            if (p[22] if len(p) > 22 else 0) < qty:
+                return "铜钱不足。"
+            await set_player_field(user_id, coin=(p[22] if len(p) > 22 else 0) - qty)
+        else:
+            if p[7] < qty:
+                return "灵石不足。"
+            await set_player_field(user_id, stone=p[7] - qty)
+        tech = await get_tech_status(project)
+        if not tech:
+            return "项目数据异常。"
+        current, max_progress, level = tech[1], tech[2], tech[3]
+        if not max_progress:
+            max_progress = TECH_PROJECTS[project]["max"]
+        current += qty
+        leveled = False
+        while current >= max_progress:
+            level += 1
+            current -= max_progress
+            leveled = True
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "UPDATE server_tech SET current_progress=?, level=? WHERE tech_name=?",
+                (current, level, project),
+            )
+            await db.commit()
+        msg = f"你向{project}捐赠了{currency}×{qty}。当前进度：{current}/{max_progress}。"
+        if leveled:
+            msg += f"\n延康国师宣布：{project}铺设完毕！全服玩家获得权限！"
+        return msg
+
     if cmd == "图鉴":
         category = rest.strip()
         if not category:
@@ -1724,27 +2422,369 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
             return "未知分类。可选：丹药/武器/护具/材料/丹方/武器方/护具方/限量武器/限量防具/超稀有丹药/限量道具"
         return format_block(f"{category}图鉴", lines, ["提示：天道可用 .天道 发放 发放物品。"])
 
+    if cmd == "喂食":
+        p = await get_player(user_id)
+        if not p:
+            return "你尚未入道，请先发送 .检测灵体。"
+        if is_ghost(p):
+            return "你已身处幽都，无法喂食。"
+        if not rest.strip():
+            return "用法：.喂食 赤火灵丹/灵石*数量"
+        name, qty = parse_item_qty(rest)
+        qty = max(1, qty)
+        now = int(time.time())
+        if name == "灵石":
+            cost = 50 * qty
+            if p[7] < cost:
+                return f"灵石不足，需要 {cost}。"
+            await set_player_field(user_id, stone=p[7] - cost)
+        elif name == "赤火灵丹":
+            have = await inv_get(user_id, name)
+            if have < qty:
+                return f"储物袋中不足（拥有 {have}）。"
+            await inv_add(user_id, name, -qty)
+        else:
+            return "龙麒麟只吃赤火灵丹或灵石。"
+        current = p[28] if len(p) > 28 else 0
+        start = max(now, current)
+        fed_until = start + DRAGON_BUFF_DURATION * qty
+        await set_player_field(user_id, dragon_fed_until=fed_until)
+        return "龙麒麟吞下丹药，舒服地打了个饱嗝，慢吞吞地站了起来：'教主，去哪？'"
+
+    if cmd == "鬼市":
+        p = await get_player(user_id)
+        if not p:
+            return "你尚未入道，请先发送 .检测灵体。"
+        if is_ghost(p):
+            return "你已身处幽都，无法进入鬼市。"
+        action = rest.strip()
+        if action != "淘宝":
+            return "用法：.鬼市 淘宝"
+        now = time.localtime()
+        hour = now.tm_hour
+        location = p[23] if len(p) > 23 else ""
+        if not (hour >= 20 or hour < 6):
+            return "鬼市只在夜晚（20:00-06:00）开放。"
+        if location not in ("延康", "大墟"):
+            return "鬼市只会在延康或大墟现身。"
+        coin = p[22] if len(p) > 22 else 0
+        if coin < GHOST_MARKET_COST:
+            return f"铜钱不足，需要 {GHOST_MARKET_COST}。"
+        await set_player_field(user_id, coin=coin - GHOST_MARKET_COST)
+        roll = random.random()
+        if roll < 0.5:
+            item = random.choice(["破碎的瓦片", "不知名的骨头"])
+            await inv_add(user_id, item, 1)
+            return f"你在鬼市的摊位前蹲下，摊主戴着面具，阴森地看着你……\n你买到了一个看起来很厉害的……垃圾：{item}。"
+        if roll < 0.8:
+            item = random.choice(["赤火灵丹", "精铁"])
+            await inv_add(user_id, item, 1)
+            return f"鬼市摊主掀开黑布，你淘到了：{item}。"
+        item = random.choice(["古神血液滴", "剑丸粗胚"])
+        await inv_add(user_id, item, 1)
+        return f"你在鬼市中捡到稀罕物：{item}！"
+
+    if cmd == "交易":
+        p = await get_player(user_id)
+        if not p:
+            return "你尚未入道，请先发送 .检测灵体。"
+        if not is_ghost(p):
+            return "你尚在阳世，无需交易。"
+        if rest.strip() != "土伯":
+            return "用法：.交易 土伯"
+        exp_cost = max(1, int(p[6] * 0.1))
+        coin_cost = int((p[22] if len(p) > 22 else 0) * 0.5)
+        if coin_cost > 0:
+            await set_player_field(
+                user_id,
+                coin=(p[22] if len(p) > 22 else 0) - coin_cost,
+                cur_hp=p[32] if len(p) > 32 else 100,
+                status="ALIVE",
+                location="延康",
+                soul_debuff_until=0,
+            )
+            return "土伯收下了你的买路钱，把你踢回了阳间。"
+        await set_player_field(
+            user_id,
+            exp=max(0, p[6] - exp_cost),
+            cur_hp=p[32] if len(p) > 32 else 100,
+            status="ALIVE",
+            location="延康",
+            soul_debuff_until=0,
+        )
+        return "土伯收下了你的修为，把你踢回了阳间。"
+
+    if cmd == "偷渡":
+        p = await get_player(user_id)
+        if not p:
+            return "你尚未入道，请先发送 .检测灵体。"
+        if not is_ghost(p):
+            return "你尚在阳世，无需偷渡。"
+        now = int(time.time())
+        if random.random() < 0.5:
+            exp_loss = int(p[6] * 0.3)
+            await set_player_field(
+                user_id,
+                exp=max(0, p[6] - exp_loss),
+                soul_debuff_until=now + SOUL_DEBUFF_DURATION,
+            )
+            return "偷渡失败！你魂魄受损，修为大跌，进入魂伤状态（24小时）。"
+        await set_player_field(
+            user_id,
+            cur_hp=p[32] if len(p) > 32 else 100,
+            status="ALIVE",
+            location="延康",
+            soul_debuff_until=0,
+        )
+        return "你躲过了鬼差的视线，从奈何桥底爬了回来。"
+
+    if cmd == "飘荡":
+        p = await get_player(user_id)
+        if not p:
+            return "你尚未入道，请先发送 .检测灵体。"
+        if not is_ghost(p):
+            return "你尚在阳世，无需飘荡。"
+        return "你在幽都飘荡，阴风阵阵，仿佛听见远处有人呼唤。"
+
+    if cmd == "道门":
+        action = rest.strip()
+        if not action or not action.startswith("解题"):
+            return "用法：.道门 解题 [答案]"
+        p = await get_player(user_id)
+        if not p:
+            return "你尚未入道，请先发送 .检测灵体。"
+        if len(p) > 25 and p[25]:
+            return "你已获得道门免试资格，可直接申请加入。"
+        parts = action.split(maxsplit=1)
+        now = int(time.time())
+        if len(parts) == 1:
+            a = random.randint(12, 48)
+            b = random.randint(9, 37)
+            answer = a + b
+            await set_player_field(user_id, dao_waiver_answer=answer, dao_waiver_ts=now)
+            return format_block("道门解题", [f"请计算：{a}+{b} = ?"], ["用法：.道门 解题 你的答案"])
+        try:
+            guess = int(parts[1].strip())
+        except ValueError:
+            return "答案需为整数。"
+        answer = p[26] if len(p) > 26 else 0
+        asked_ts = p[27] if len(p) > 27 else 0
+        if not answer or now - asked_ts > DAO_MEN_QUIZ_COOLDOWN:
+            return "题目已过期，请重新发送 .道门 解题 获取新题。"
+        if guess != answer:
+            await set_player_field(user_id, dao_waiver_answer=0, dao_waiver_ts=0)
+            return "回答错误，请重新发送 .道门 解题 获取新题。"
+        await set_player_field(user_id, dao_waiver=1, dao_waiver_answer=0, dao_waiver_ts=0)
+        return "解题成功，你已获得道门免试资格！"
+
     if cmd == "宗门":
         action = rest.strip()
         if not action or action in ("查看", "列表"):
             lines = []
             for name, info in SECTS.items():
-                lines.append(f"{name}｜{info['desc']}")
-            return format_block("宗门一览", lines, ["用法：.宗门 加入 宗门名"])
+                req_tier = info.get("req_tier", 0)
+                req_stone = info.get("req_stone", 0)
+                if req_tier <= 0 and req_stone <= 0:
+                    req_line = "入门要求：无"
+                else:
+                    req_line = f"入门要求：境界{format_realm_requirement(req_tier, 1)}｜灵石{req_stone}"
+                waiver = info.get("waiver_item") or info.get("waiver_cmd")
+                waiver_line = f"免试：{waiver}" if waiver else "免试：无"
+                lines.append(f"{name}｜{info['desc']}｜{req_line}｜{waiver_line}")
+            return format_block("宗门一览", lines, ["用法：.宗门 加入 宗门名 / .宗门 信息 / .宗门 签到"])
+        if action in ("信息", "详情"):
+            p = await get_player(user_id)
+            if not p:
+                return "你尚未入道，请先发送 .检测灵体。"
+            sect_name = p[17] if len(p) > 17 else ""
+            if not sect_name:
+                return "你尚未加入宗门。可用：.宗门 查看"
+            info = SECTS.get(sect_name, {})
+            contrib = p[19] if len(p) > 19 else 0
+            sect_task_ready_ts = p[20] if len(p) > 20 else 0
+            now = int(time.time())
+            if now < sect_task_ready_ts:
+                left = sect_task_ready_ts - now
+                task_line = f"宗门任务：冷却中（{left//60}分{left%60}秒）"
+            else:
+                task_line = "宗门任务：可领取"
+            sect_signin_ts = p[21] if len(p) > 21 else 0
+            if now < sect_signin_ts + SECT_SIGNIN_COOLDOWN:
+                left = sect_signin_ts + SECT_SIGNIN_COOLDOWN - now
+                signin_line = f"宗门签到：冷却中（{left//3600}小时{left%3600//60}分）"
+            else:
+                signin_line = "宗门签到：可领取"
+            return format_block(
+                "宗门信息",
+                [
+                    f"宗门：{sect_name}",
+                    f"宗门描述：{info.get('desc', '暂无')}",
+                    f"宗门贡献：{contrib}",
+                    task_line,
+                    signin_line,
+                ],
+                ["提示：.宗门 任务 / .宗门 签到 / .宗门 兑换"],
+            )
+        if action.startswith("任务"):
+            p = await get_player(user_id)
+            if not p:
+                return "你尚未入道，请先发送 .检测灵体。"
+            sect_name = p[17] if len(p) > 17 else ""
+            if not sect_name:
+                return "你尚未加入宗门。可用：.宗门 加入 宗门名"
+            now = int(time.time())
+            sect_task_ready_ts = p[20] if len(p) > 20 else 0
+            if now < sect_task_ready_ts:
+                left = sect_task_ready_ts - now
+                return f"宗门任务冷却中，请在 {left//60}分{left%60}秒 后再试。"
+            task = build_sect_task()
+            missing = []
+            for item, qty in task["requirements"]:
+                if item == "灵石":
+                    if p[7] < qty:
+                        missing.append(f"灵石不足（需要 {qty}）")
+                    continue
+                have = await inv_get(user_id, item)
+                if have < qty:
+                    missing.append(f"{item}不足（需要 {qty}）")
+            if missing:
+                return format_block(
+                    "宗门任务",
+                    [f"任务：{task['title']}", "需求："] + [f"- {item} × {qty}" for item, qty in task["requirements"]],
+                    ["缺少：" + "、".join(missing), "可通过 .储物袋 查看库存。"],
+                )
+            for item, qty in task["requirements"]:
+                if item == "灵石":
+                    continue
+                await inv_add(user_id, item, -qty)
+            new_stone = p[7]
+            if task.get("stone_cost"):
+                new_stone -= task["stone_cost"]
+            contrib_gain = task["contrib"]
+            await set_player_field(
+                user_id,
+                stone=new_stone,
+                sect_contrib=(p[19] if len(p) > 19 else 0) + contrib_gain,
+                sect_task_ready_ts=now + SECT_TASK_COOLDOWN,
+            )
+            rewards = [f"宗门贡献×{contrib_gain}"]
+            return format_block(
+                "宗门任务完成",
+                [f"任务：{task['title']}", "提交：" + "、".join([f"{i}×{q}" for i, q in task["requirements"]]), "奖励：" + "、".join(rewards)],
+                ["提示：宗门任务冷却为8小时。"],
+            )
+        if action.startswith("签到"):
+            p = await get_player(user_id)
+            if not p:
+                return "你尚未入道，请先发送 .检测灵体。"
+            sect_name = p[17] if len(p) > 17 else ""
+            if not sect_name:
+                return "你尚未加入宗门。可用：.宗门 加入 宗门名"
+            now = int(time.time())
+            last_signin = p[21] if len(p) > 21 else 0
+            if now < last_signin + SECT_SIGNIN_COOLDOWN:
+                left = last_signin + SECT_SIGNIN_COOLDOWN - now
+                return f"宗门签到冷却中，请在 {left//3600}小时{left%3600//60}分 后再试。"
+            contrib_gain = random.randint(3, 6)
+            await set_player_field(
+                user_id,
+                sect_contrib=(p[19] if len(p) > 19 else 0) + contrib_gain,
+                sect_signin_ts=now,
+            )
+            return format_block("宗门签到", [f"获得宗门贡献×{contrib_gain}"], ["提示：每日可签到一次。"])
+        if action.startswith("兑换"):
+            p = await get_player(user_id)
+            if not p:
+                return "你尚未入道，请先发送 .检测灵体。"
+            sect_name = p[17] if len(p) > 17 else ""
+            if not sect_name:
+                return "你尚未加入宗门。可用：.宗门 加入 宗门名"
+            parts = action.split(maxsplit=1)
+            available = sect_shop_items(sect_name)
+            if len(parts) == 1:
+                recipe_count = sum(1 for info in available.values() if info.get("kind") == "配方")
+                token_count = sum(1 for info in available.values() if info.get("kind") == "信物")
+                blueprint_count = sum(1 for info in available.values() if info.get("kind") == "图纸")
+                return format_block(
+                    "宗门兑换",
+                    [
+                        f"配方可兑换数量：{recipe_count}",
+                        f"信物可兑换数量：{token_count}",
+                        f"图纸可兑换数量：{blueprint_count}",
+                        "查看配方：.宗门 兑换 配方",
+                        "查看材料：.宗门 兑换 材料",
+                        "查看信物：.宗门 兑换 信物",
+                        "查看图纸：.宗门 兑换 图纸",
+                    ],
+                    ["用法：.宗门 兑换 物品名"],
+                )
+            if parts[1].strip() in ("配方", "材料", "信物", "图纸"):
+                category = parts[1].strip()
+                lines = []
+                for name, info in available.items():
+                    item_kind = info.get("kind")
+                    if category == "配方" and item_kind != "配方":
+                        continue
+                    if category == "信物" and item_kind != "信物":
+                        continue
+                    if category == "图纸" and item_kind != "图纸":
+                        continue
+                    if category == "材料" and item_kind in ("配方", "信物", "图纸"):
+                        continue
+                    lines.append(f"{name}｜贡献:{info['cost']}｜数量:{info['qty']}")
+                title = f"宗门兑换（{category}）"
+                return format_block(title, lines or ["暂无可兑换物品。"], ["用法：.宗门 兑换 物品名"])
+            item_name = parts[1].strip()
+            if item_name not in available:
+                return "未知兑换物品。可用：.宗门 兑换"
+            info = available[item_name]
+            contrib = p[19] if len(p) > 19 else 0
+            if contrib < info["cost"]:
+                return f"宗门贡献不足，需要 {info['cost']} 点。"
+            await set_player_field(user_id, sect_contrib=contrib - info["cost"])
+            await inv_add(user_id, item_name, info["qty"])
+            return format_block(
+                "兑换成功",
+                [f"物品：{item_name} × {info['qty']}", f"消耗贡献：{info['cost']}"],
+            )
         if action.startswith("加入"):
             parts = action.split(maxsplit=1)
             if len(parts) != 2:
                 return "用法：.宗门 加入 宗门名"
             sect_name = parts[1].strip()
             if sect_name not in SECTS:
-                return "未知宗门。可用：延康皇朝/天道圣教/残老村"
+                return "未知宗门。可用：延康/道门/天魔教/大雷音寺"
             p = await get_player(user_id)
             if not p:
                 return "你尚未入道，请先发送 .检测灵体。"
-            if len(p) > 17 and p[17]:
+            if len(p) > 17 and p[17] == sect_name:
                 return f"你已加入宗门：{p[17]}"
-            await set_player_field(user_id, sect=sect_name)
-            starter_kind = SECTS[sect_name]["starter_kind"]
+            if len(p) > 17 and p[17] and p[17] != "延康":
+                return f"你已加入宗门：{p[17]}"
+            info = SECTS[sect_name]
+            req_tier = info.get("req_tier", 0)
+            req_stone = info.get("req_stone", 0)
+            tier = p[4]
+            stone = p[7]
+            genius = len(p) > 24 and p[24]
+            waiver_item = info.get("waiver_item")
+            waiver_cmd = info.get("waiver_cmd")
+            can_waive = False
+            if waiver_item:
+                have = await inv_get(user_id, waiver_item)
+                if have > 0:
+                    can_waive = True
+            if not can_waive and waiver_cmd and sect_name == "道门":
+                can_waive = len(p) > 25 and p[25]
+            if not can_waive:
+                if not genius and tier < req_tier:
+                    return "你资质平平（无信物）且囊中羞涩（灵石不足）。请先在延康打工，或去大墟碰碰运气。"
+                if stone < req_stone:
+                    return "你资质平平（无信物）且囊中羞涩（灵石不足）。请先在延康打工，或去大墟碰碰运气。"
+            if not can_waive and req_stone > 0:
+                await set_player_field(user_id, stone=stone - req_stone)
+            await set_player_field(user_id, sect=sect_name, location=sect_name)
+            starter_kind = info.get("starter_kind", "丹方")
             recipe_name = await pick_recipe_by_kind(starter_kind, max_tier=1)
             rewards = []
             if recipe_name:
@@ -1757,8 +2797,13 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
                 await inv_add(user_id, item, qty)
                 rewards.append(f"{item}×{qty}")
             reward_line = "、".join(rewards) if rewards else "暂无"
-            return format_block("宗门加入成功", [f"宗门：{sect_name}", f"入门奖励：{reward_line}"])
-        return "用法：.宗门 查看/加入 宗门名"
+            join_msg = info.get("join_msg")
+            extra = [join_msg] if join_msg and can_waive else []
+            return format_block(
+                "宗门加入成功",
+                [f"宗门：{sect_name}", f"入门奖励：{reward_line}"] + extra,
+            )
+        return "用法：.宗门 查看/加入 宗门名/信息/任务/签到/兑换"
 
     if cmd == "任务":
         p = await get_player(user_id)
@@ -1770,6 +2815,30 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
             left = task_ready_ts - now
             return f"任务冷却中，请在 {left//60}分{left%60}秒 后再试。"
         sect = p[17] if len(p) > 17 else ""
+        if sect in ("延康", "延康皇朝"):
+            mission = random.choice(["修筑铁路", "为国师打铁", "协助太医救人"])
+            coin_reward = random.randint(450, 650)
+            stone_reward = random.randint(5, 10)
+            exp_reward = random.randint(20, 40)
+            give_torch = random.random() < 0.3
+            await set_player_field(
+                user_id,
+                coin=(p[22] if len(p) > 22 else 0) + coin_reward,
+                stone=p[7] + stone_reward,
+                task_ready_ts=now + TASK_COOLDOWN,
+            )
+            await add_exp(user_id, exp_reward)
+            if give_torch:
+                await inv_add(user_id, "火把", 1)
+            return format_block(
+                "延康任务完成",
+                [
+                    f"任务：{mission}",
+                    f"奖励：铜钱×{coin_reward}、灵石×{stone_reward}、修为×{exp_reward}"
+                    + ("、火把×1" if give_torch else ""),
+                ],
+                ["提示：国家任务稳定发薪。"],
+            )
         base_stone = random.randint(30, 80)
         materials_pool = ["灵木", "星砂", "玄铁矿", "黑曜石", "灵泉露", "玄玉", "赤金"]
         materials = random.sample(materials_pool, k=3)
@@ -1793,7 +2862,14 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         if not p:
             return "你尚未入道，请先发送 .检测灵体。"
         if not rest.strip():
-            return "用法：.炼制 配方名/目标物品*数量"
+            return format_block(
+                "炼制",
+                [
+                    "请输入阁下想要炼制的物品",
+                    "用法：.炼制 配方名/目标物品*数量",
+                    "提示：可用 .我的配方 查看已学配方。",
+                ],
+            )
         name, qty = parse_item_qty(rest)
         qty = max(1, qty)
         recipe_name = name if name in RECIPES else None
