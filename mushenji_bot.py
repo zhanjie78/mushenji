@@ -607,7 +607,9 @@ CREATE TABLE IF NOT EXISTS player (
   cur_hp INTEGER DEFAULT 100,
   test_drug_ts INTEGER DEFAULT 0,
   temp_lingti TEXT DEFAULT '',
-  temp_lingti_ts INTEGER DEFAULT 0
+  temp_lingti_ts INTEGER DEFAULT 0,
+  soul_debuff_name TEXT DEFAULT '',
+  soul_debuff_until INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS inv (
@@ -670,6 +672,10 @@ async def db_init():
             await db.execute("ALTER TABLE player ADD COLUMN temp_lingti TEXT DEFAULT ''")
         if "temp_lingti_ts" not in cols:
             await db.execute("ALTER TABLE player ADD COLUMN temp_lingti_ts INTEGER DEFAULT 0")
+        if "soul_debuff_name" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN soul_debuff_name TEXT DEFAULT ''")
+        if "soul_debuff_until" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN soul_debuff_until INTEGER DEFAULT 0")
         if LIMITED_ITEMS:
             await db.executemany(
                 "INSERT OR IGNORE INTO limited_stock(item, qty) VALUES(?, ?)",
@@ -1925,12 +1931,20 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         title_name = p[31] if len(p) > 31 else ""
         max_hp = p[32] if len(p) > 32 else 100
         cur_hp = p[33] if len(p) > 33 else max_hp
-        temp_lingti = temp_lingti_active(p, int(time.time()))
-        dragon_line = "龙麒麟：就绪" if dragon_active(p, int(time.time())) else "龙麒麟：沉睡"
-        if title_until and int(time.time()) < title_until and title_name:
+        now = int(time.time())
+        temp_lingti = temp_lingti_active(p, now)
+        dragon_line = "龙麒麟：就绪" if dragon_active(p, now) else "龙麒麟：沉睡"
+        soul_debuff_name = p[37] if len(p) > 37 else ""
+        soul_debuff_until = p[38] if len(p) > 38 and now < p[38] else 0
+        if title_until and now < title_until and title_name:
             title_line = f"称号：{title_name}"
         else:
             title_line = "称号：暂无"
+        if soul_debuff_until and soul_debuff_name:
+            left = soul_debuff_until - now
+            soul_line = f"魂魄状态：{soul_debuff_name}（{left//60}分{left%60}秒）"
+        else:
+            soul_line = "魂魄状态：正常"
         return format_block(
             "道友档案",
             [
@@ -1949,6 +1963,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
                 f"临时灵体：{temp_lingti or '无'}",
                 dragon_line,
                 title_line,
+                soul_line,
                 genius_line,
             ],
         )
