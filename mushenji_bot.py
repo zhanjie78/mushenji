@@ -14,6 +14,15 @@ load_dotenv()
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
 
+# ==========================================
+# UTC+8 时间辅助函数
+# ==========================================
+def get_beijing_hour() -> int:
+    """获取北京时间(UTC+8)的小时数，用于判断昼夜"""
+    utc_ts = time.time()
+    bj_ts = utc_ts + 8 * 3600
+    return time.gmtime(bj_ts).tm_hour
+
 # ----------------------------
 # 配置
 # ----------------------------
@@ -607,7 +616,9 @@ CREATE TABLE IF NOT EXISTS player (
   cur_hp INTEGER DEFAULT 100,
   test_drug_ts INTEGER DEFAULT 0,
   temp_lingti TEXT DEFAULT '',
-  temp_lingti_ts INTEGER DEFAULT 0
+  temp_lingti_ts INTEGER DEFAULT 0,
+  soul_debuff_name TEXT DEFAULT '',
+  soul_debuff_until INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS inv (
@@ -670,6 +681,10 @@ async def db_init():
             await db.execute("ALTER TABLE player ADD COLUMN temp_lingti TEXT DEFAULT ''")
         if "temp_lingti_ts" not in cols:
             await db.execute("ALTER TABLE player ADD COLUMN temp_lingti_ts INTEGER DEFAULT 0")
+        if "soul_debuff_name" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN soul_debuff_name TEXT DEFAULT ''")
+        if "soul_debuff_until" not in cols:
+            await db.execute("ALTER TABLE player ADD COLUMN soul_debuff_until INTEGER DEFAULT 0")
         if LIMITED_ITEMS:
             await db.executemany(
                 "INSERT OR IGNORE INTO limited_stock(item, qty) VALUES(?, ?)",
@@ -803,37 +818,6 @@ async def limited_stock_add(item: str, delta: int) -> int:
     return new_qty
 
 
-async def limited_stock_get(item: str) -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT qty FROM limited_stock WHERE item=?", (item,))
-        row = await cur.fetchone()
-        return row[0] if row else 0
-
-
-async def limited_stock_all() -> dict[str, int]:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT item, qty FROM limited_stock ORDER BY item")
-        rows = await cur.fetchall()
-        return {item: qty for item, qty in rows}
-
-
-async def limited_stock_set(item: str, qty: int) -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO limited_stock(item, qty) VALUES(?, ?) "
-            "ON CONFLICT(item) DO UPDATE SET qty=excluded.qty",
-            (item, max(0, qty)),
-        )
-        await db.commit()
-
-
-async def limited_stock_add(item: str, delta: int) -> int:
-    current = await limited_stock_get(item)
-    new_qty = max(0, current + delta)
-    await limited_stock_set(item, new_qty)
-    return new_qty
-
-
 # ----------------------------
 # 业务逻辑（MVP版）
 # ----------------------------
@@ -861,10 +845,6 @@ def weighted_choice_with_weight(pool: list[tuple[str, int]]) -> tuple[str, int]:
 
 def gen_daohao() -> str:
     return random.choice(DAOHAO_PREFIX) + random.choice(DAOHAO_SUFFIX)
-
-
-def format_materials(mats: list[tuple[str, int]]) -> str:
-    return "、".join([f"{name}×{qty}" for name, qty in mats])
 
 
 def format_materials(mats: list[tuple[str, int]]) -> str:
@@ -1228,7 +1208,40 @@ async def do_train(user_id: int) -> str:
     if not p:
         return "你尚未入道，请先发送 .检测灵体。"
 
+    # --- 大墟黑夜机制 Start ---
+    location = p[23] if len(p) > 23 else "延康"
     now = int(time.time())
+
+    torch_used = False
+    # 只有在大墟才判断黑夜
+    if location == "大墟":
+        hour = get_beijing_hour()
+        # 19点到6点为黑夜
+        if hour >= 19 or hour < 6:
+            # 龙麒麟发光或者有特殊Buff可以无视黑暗(暂未实现，先预留)
+            if not dragon_active(p, now):
+                # 1. 检查是否有石像吊坠 (假设这是之后加的道具，先预留逻辑，或者直接跳过)
+                # 2. 检查火把
+                has_torch = await inv_get(user_id, "火把")
+                if has_torch > 0:
+                    # 自动消耗火把保命
+                    await inv_add(user_id, "火把", -1)
+                    torch_used = True
+                    # 可以在返回文本里加提示，这里暂时不中断，继续修炼
+                else:
+                    # 没有火把，触发黑暗侵袭
+                    max_hp = p[32] if len(p) > 32 else 100
+                    cur_hp = p[33] if len(p) > 33 else max_hp
+                    damage = int(max_hp * 0.4)  # 扣40%血
+                    new_hp = max(1, cur_hp - damage)
+                    await set_player_field(user_id, cur_hp=new_hp)
+                    return (
+                        "【大墟惊变】\n天黑了，黑暗从四面八方涌来！\n"
+                        "你没有【火把】，黑暗中的怪物撕扯着你的肉体！\n"
+                        f"闭关失败，生命减少 {damage} 点。请尽快寻找光源或前往延康！"
+                    )
+    # --- 大墟黑夜机制 End ---
+
     train_ready_ts = p[8]
     if now < train_ready_ts:
         left = train_ready_ts - now
@@ -1237,37 +1250,36 @@ async def do_train(user_id: int) -> str:
     tier, stage, exp = p[4], p[5], p[6]
     toxic_points = p[14]
 
-    # 基础收益：境界越高越大（符合模板描述）
+    # 基础收益
     base = 40 + tier * 35 + stage * 6 + random.randint(0, 20)
-
     gain_mul, success_penalty = apply_toxicity_effect(toxic_points)
     base = int(base * gain_mul)
 
-    # 三种结果：成功 / 失败 / 走火入魔（模板描述）
     success_rate = 0.72 - success_penalty
-    devil_rate = 0.06 + min(0.10, 0.01 * toxic_points)  # 丹毒高更容易出事（可调）
+    devil_rate = 0.06 + min(0.10, 0.01 * toxic_points)
     r = random.random()
 
     delta = 0
     extra = ""
     if r < devil_rate:
-        # 走火入魔：扣一点修为
         delta = -max(10, base // 2)
         extra = "走火入魔！道心震荡，修为受损。"
     elif r < devil_rate + (1 - devil_rate) * (1 - success_rate):
-        # 失败：小收益
         delta = max(5, base // 5)
         extra = "闭关受阻，收效甚微。"
     else:
-        # 成功：大收益
         delta = base
-        extra = "吐纳有成，灵气入体！大墟灵气回涌，周身一暖。"
-        # 奇遇（模板描述“有几率触发奇遇”）
+        extra = "吐纳有成，灵气入体！"
+        # 大墟特殊环境描述
+        if location == "大墟":
+            extra = "大墟灵气狂暴而浓郁，冲刷着你的经脉！"
+            delta = int(delta * 1.2)  # 大墟修炼加成20%
+
+        # 奇遇
         if random.random() < 0.08:
             bonus = random.randint(30, 120)
             delta += bonus
             extra += f"\n奇遇触发：额外获得修为 {bonus} 点。"
-            # 小概率掉落1颗聚气丹（示例）
             if random.random() < 0.25:
                 await inv_add(user_id, "聚气丹", 1)
                 extra += "\n你在奇遇中得了一枚【聚气丹】。"
@@ -1275,67 +1287,33 @@ async def do_train(user_id: int) -> str:
     await add_exp(user_id, delta)
     await maybe_rank_up(user_id)
 
-    # 设置下一次随机冷却 10-15分钟（模板描述）
+    # 冷却时间
     cd = random.randint(TRAIN_CD_MIN, TRAIN_CD_MAX)
     if dragon_active(p, now):
         cd = max(60, int(cd * 0.7))
     await set_player_field(user_id, train_ready_ts=now + cd)
 
     p2 = await get_player(user_id)
-    tier2, stage2, exp2 = p2[4], p2[5], p2[6]
-
-    cur_in_phase, cap_in_phase = exp_view_in_phase(exp2, tier2, stage2)
+    cur_in_phase, cap_in_phase = exp_view_in_phase(p2[6], p2[4], p2[5])
     mins = (cd + 59) // 60
 
+    # 掉落逻辑
     loot_lines = await roll_training_loot(user_id, TRAIN_LOOT_CHANCE)
+
+    # 如果在大墟且使用了火把，提示一下
+    if torch_used:
+        extra += "\n(夜间修炼消耗火把×1，驱散了黑暗)"
 
     detail_lines = ["结果："]
     for line in extra.splitlines():
         detail_lines.append(f"- {line}")
-    if len(detail_lines) == 1:
-        detail_lines.append("- 平淡无奇。")
     detail_lines.append(f"- 修为变化：{delta:+d}")
-    detail_lines.append(f"- 当前境界：{realm_name(tier2, stage2)}")
+    detail_lines.append(f"- 当前境界：{realm_name(p2[4], p2[5])}")
     detail_lines.append(f"- 当前修为：{cur_in_phase}/{cap_in_phase}")
     if loot_lines:
         detail_lines.extend([f"- {line}" for line in loot_lines])
 
-    footer_lines = [f"调息：{mins}分钟后可再次闭关。"]
-    return format_block("闭关修炼", detail_lines, footer_lines)
-
-
-async def pick_recipe_by_kind(kind: str, max_tier: int = 1) -> Optional[str]:
-    candidates = [
-        name for name, info in RECIPES.items()
-        if info["kind"] == kind and info.get("tier", 0) <= max_tier
-    ]
-    if not candidates:
-        return None
-    return random.choice(candidates)
-
-
-def craft_cost(target_name: str, kind: str) -> int:
-    if kind == "丹方":
-        info = PILLS.get(target_name, {})
-        return max(5, int(info.get("price", 0) * 0.35))
-    if kind == "武器方":
-        info = WEAPONS.get(target_name, {})
-        return max(12, int(info.get("price", 0) * 0.25))
-    if kind == "护具方":
-        info = ARMORS.get(target_name, {})
-        return max(10, int(info.get("price", 0) * 0.25))
-    return 0
-
-
-async def roll_training_loot(user_id: int, chance: float) -> list[str]:
-    if random.random() > chance:
-        return []
-    item, weight = weighted_choice_with_weight(TRAIN_LOOT_POOL)
-    qty = 1 if weight <= 8 else random.randint(1, 2)
-    if item == "四灵血":
-        qty = 1
-    await inv_add(user_id, item, qty)
-    return [f"获得{item}×{qty}"]
+    return format_block("闭关修炼", detail_lines, [f"调息：{mins}分钟后可再次闭关。"])
 
 
 async def pick_recipe_by_kind(kind: str, max_tier: int = 1) -> Optional[str]:
@@ -1925,12 +1903,20 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         title_name = p[31] if len(p) > 31 else ""
         max_hp = p[32] if len(p) > 32 else 100
         cur_hp = p[33] if len(p) > 33 else max_hp
-        temp_lingti = temp_lingti_active(p, int(time.time()))
-        dragon_line = "龙麒麟：就绪" if dragon_active(p, int(time.time())) else "龙麒麟：沉睡"
-        if title_until and int(time.time()) < title_until and title_name:
+        now = int(time.time())
+        temp_lingti = temp_lingti_active(p, now)
+        dragon_line = "龙麒麟：就绪" if dragon_active(p, now) else "龙麒麟：沉睡"
+        soul_debuff_name = p[37] if len(p) > 37 else ""
+        soul_debuff_until = p[38] if len(p) > 38 and now < p[38] else 0
+        if title_until and now < title_until and title_name:
             title_line = f"称号：{title_name}"
         else:
             title_line = "称号：暂无"
+        if soul_debuff_until and soul_debuff_name:
+            left = soul_debuff_until - now
+            soul_line = f"魂魄状态：{soul_debuff_name}（{left//60}分{left%60}秒）"
+        else:
+            soul_line = "魂魄状态：正常"
         return format_block(
             "道友档案",
             [
@@ -1949,6 +1935,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
                 f"临时灵体：{temp_lingti or '无'}",
                 dragon_line,
                 title_line,
+                soul_line,
                 genius_line,
             ],
         )
@@ -2009,6 +1996,32 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
             await inv_add(user_id, "火把", -1)
         await set_player_field(user_id, location=target)
         return f"你已前往 {target}。"
+
+    if cmd == "拜访":
+        p = await get_player(user_id)
+        if not p:
+            return "你尚未入道。"
+        location = p[23] if len(p) > 23 else ""
+        if location != "大墟":
+            return "你四顾茫然，这里不是残老村（大墟）。只有在大墟才能拜访各位长者。"
+
+        target = rest.strip()
+        if not target:
+            return "用法：.拜访 村长/屠夫/药师..."
+
+        if target == "村长":
+            # 简单的霸体觉醒逻辑
+            lingti = p[3]
+            if "霸体" in lingti:
+                return "村长看着你：'霸体已成，去战斗吧！'"
+            has_blood = await inv_get(user_id, "四灵血")
+            if has_blood > 0:
+                await inv_add(user_id, "四灵血", -1)
+                await set_player_field(user_id, lingti="苍天霸体")
+                return format_block("霸体觉醒", ["你献上【四灵血】。", "村长为你解开了封印！", "灵体变更为：苍天霸体"])
+            return "村长：'你其实是苍天霸体，去找【四灵血】来，我为你解开封印。'"
+
+        return f"{target} 似乎不在家。"
 
     if cmd == "出售":
         p = await get_player(user_id)
@@ -2589,7 +2602,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         if not p:
             return "你尚未入道，请先发送 .检测灵体。"
         if not rest.strip():
-            return "用法：.服用 丹药名*数量（例如：.服用 聚气丹*2）"
+            return "用法：.服用 丹药名*数量"
         name, qty = parse_item_qty(rest)
         qty = max(1, qty)
 
@@ -2599,7 +2612,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
 
         pill = PILLS.get(name)
         if not pill:
-            return format_block("服用失败", [f"未知丹药：{name}", f"延康丹房仅内置：{', '.join(PILLS.keys())}"])
+            return format_block("服用失败", [f"未知丹药：{name}"])
 
         tier, stage = p[4], p[5]
         if (tier < pill["min_tier"]) or (tier == pill["min_tier"] and stage < pill["min_stage"]):
@@ -2613,17 +2626,21 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         last_name = p[15]
         last_ts = p[16]
 
+        # 逻辑分支1：清除丹毒
         if pill.get("clear_toxic"):
             await set_player_field(user_id, toxic_points=0, last_pill_name="", last_pill_ts=0)
             return format_block("服用成功", ["洗髓丹入腹，丹毒尽消，道心澄明。"])
 
+        # 逻辑分支2：减少丹毒
         if pill.get("reduce_toxic"):
             toxic_points = max(0, toxic_points - pill["reduce_toxic"] * qty)
-            await set_player_field(user_id, toxic_points=toxic_points, last_pill_name="", last_pill_ts=0)
-            gain = pill["exp"] * qty
+            # 有些减毒丹药也加修为
+            gain = pill.get("exp", 0) * qty
             if gain:
                 await add_exp(user_id, gain)
                 await maybe_rank_up(user_id)
+            await set_player_field(user_id, toxic_points=toxic_points, last_pill_name="", last_pill_ts=0)
+
             p2 = await get_player(user_id)
             cur_in_phase, cap_in_phase = exp_view_in_phase(p2[6], p2[4], p2[5])
             return format_block(
@@ -2633,44 +2650,31 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
                     f"修为变化：+{gain}",
                     f"当前境界：{realm_name(p2[4], p2[5])}",
                     f"当前修为：{cur_in_phase}/{cap_in_phase}",
-                    f"丹毒层数：{toxic_points}",
+                    f"丹毒层数：{toxic_points} (已降低)",
                 ],
             )
 
-        if pill.get("reduce_toxic"):
-            toxic_points = max(0, toxic_points - pill["reduce_toxic"] * qty)
-            await set_player_field(user_id, toxic_points=toxic_points, last_pill_name="", last_pill_ts=0)
-            gain = pill["exp"] * qty
-            if gain:
-                await add_exp(user_id, gain)
-                await maybe_rank_up(user_id)
-            p2 = await get_player(user_id)
-            cur_in_phase, cap_in_phase = exp_view_in_phase(p2[6], p2[4], p2[5])
-            return format_block(
-                "服用成功",
-                [
-                    f"丹药：{name} × {qty}",
-                    f"修为变化：+{gain}",
-                    f"当前境界：{realm_name(p2[4], p2[5])}",
-                    f"当前修为：{cur_in_phase}/{cap_in_phase}",
-                    f"丹毒层数：{toxic_points}",
-                ],
-            )
-
-        # 同类丹药24小时内连续服用→丹毒累积（模板描述）
+        # 逻辑分支3：普通修炼丹药 (增加丹毒)
         if last_name == name and (now - last_ts) <= 24 * 60 * 60:
             toxic_points += qty
         else:
-            toxic_points = qty  # 新起一轮同类丹药
+            # 新的一天或者新的药，丹毒重置为本次数量(或者你可以改为累加)
+            # 这里保持原逻辑：视为新一轮
+            toxic_points = qty + (1 if p[14] > 50 else 0)  # 简单逻辑，避免永远清零
 
         await set_player_field(user_id, toxic_points=toxic_points, last_pill_name=name, last_pill_ts=now)
 
-        gain = pill["exp"] * qty
+        gain = pill.get("exp", 0) * qty
         await add_exp(user_id, gain)
         await maybe_rank_up(user_id)
 
         p2 = await get_player(user_id)
         cur_in_phase, cap_in_phase = exp_view_in_phase(p2[6], p2[4], p2[5])
+
+        warn_msg = ""
+        if toxic_points > 10:
+            warn_msg = " (丹毒淤积，请注意)"
+
         return format_block(
             "服用成功",
             [
@@ -2678,7 +2682,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
                 f"修为变化：+{gain}",
                 f"当前境界：{realm_name(p2[4], p2[5])}",
                 f"当前修为：{cur_in_phase}/{cap_in_phase}",
-                f"丹毒层数：{toxic_points}",
+                f"丹毒层数：{toxic_points}{warn_msg}",
             ],
         )
 
