@@ -400,14 +400,18 @@ def ensure_recipes() -> None:
 
 # 灵体示例（后续你可以按模板更细化）
 LINGTI_POOL = [
-    ("青龙灵体", 21.5),
-    ("朱雀灵体", 21.5),
-    ("白虎灵体", 21.5),
-    ("玄武灵体", 21.5),
+    # 四大灵体 (权重改为 20)
+    ("青龙灵体", 20.0),
+    ("朱雀灵体", 20.0),
+    ("白虎灵体", 20.0),
+    ("玄武灵体", 20.0),
+    # 新增苍天霸体 (权重 7.5，虽然原著是忽悠，但游戏里作为稀有体质存在)
+    ("苍天霸体", 7.5),
+    # 其他保持原样
     ("日耀灵体", 6.0),
     ("月华灵体", 6.0),
-    ("凡体", 30.0),
-    ("剑心通明", 0.5),
+    ("凡体", 30.0),      # 凡体依然是概率最高的，方便去见村长
+    ("剑心通明", 0.5),   # 极低概率的剑道天才
 ]
 
 LORE = {
@@ -1927,12 +1931,33 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         p = await get_player(user_id)
         if p:
             return "你已检测过灵体，可发送 .我的灵体 查看档案。"
+        
         daohao = gen_daohao()
         lingti = weighted_choice(LINGTI_POOL)
-        genius = 1 if random.random() < 0.05 else 0
+        
+        # 初始属性判断
+        genius = 0
+        confidence_bonus = 0
+        
+        # 如果天生抽到霸体，直接给予信心加成（模拟“迷之自信”）
+        if lingti == "苍天霸体":
+            confidence_bonus = 1
+        
+        # 极小概率天才（灵石炸裂逻辑保留）
+        if random.random() < 0.05:
+            genius = 1
+
+        # 创建角色
         await create_player(user_id, nick, daohao, lingti)
+        # 补充设置字段
+        await set_player_field(user_id, genius=genius, confidence_bonus=confidence_bonus)
+
+        extra_msg = ["提示：可发送 .闭关修炼 开始修行。"]
         if genius:
-            await set_player_field(user_id, genius=1)
+            extra_msg = ["检测灵石炸裂！虽然你修炼极慢，但各大宗门都争抢着要你这样的怪胎！(无视宗门境界门槛)"]
+        if lingti == "苍天霸体":
+            extra_msg.append("你感觉自己是天地间的主角，无论怎么练都不会死！（修炼获得额外加成）")
+
         return format_block(
             "检测灵体",
             [
@@ -1940,13 +1965,9 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
                 f"先天道灵体：{lingti}",
                 f"当前境界：{realm_name(0,1)}",
                 "身处大墟，万象皆险。",
-                "初始资助：铜钱100、灵石10。",
+                "初始资助：大丰币100、灵石10。",
             ],
-            (
-                ["提示：可发送 .闭关修炼 开始修行。"]
-                if not genius
-                else ["检测灵石炸裂！虽然你修炼极慢，但各大宗门都争抢着要你这样的怪胎！(无视宗门境界门槛)"]
-            ),
+            extra_msg,
         )
 
     if cmd == "我的灵体":
@@ -1996,7 +2017,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
                 f"境界：{realm_name(p[4], p[5])}",
                 f"当前修为：{cur_in_phase}/{cap_in_phase}",
                 f"灵石：{p[7]}",
-                f"铜钱：{coin}",
+                f"大丰币：{coin}",
                 f"所在地：{location}",
                 sect_line,
                 contrib_line,
@@ -2124,29 +2145,38 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
             return "用法：.拜访 村长/屠夫/药师..."
 
         if target == "村长":
-            # 简单的霸体觉醒逻辑
             lingti = p[3]
+            # 情况1：已经是霸体（天生抽到的，或者是之前改过的）
             if lingti == "苍天霸体":
-                return "村长看着你：'霸体已成，去战斗吧！'"
+                return "村长上下打量你，眼中闪过一丝惊讶：\n'没想到世间真有天生的霸体……咳咳，我是说，霸体已成，去战斗吧！不要辜负了这无敌的体质！'"
+            
+            # 情况2：凡体（触发原著经典忽悠剧情）
             if lingti == "凡体":
                 await set_player_field(user_id, lingti="苍天霸体", confidence_bonus=1)
                 return format_block(
                     "霸体觉醒",
                     [
-                        "村长拍着你的肩膀：'你是万古无一的霸体！'",
-                        "你心神激荡，信心爆棚！",
+                        "村长面色凝重，丢掉手中的拐杖，死死盯着你。",
+                        "村长：'少年，你以为你是凡体？错！大错特错！'",
+                        "村长：'你是万古无一的苍天霸体！只不过神光内敛，被凡俗蒙尘！'",
+                        "你听得热血沸腾，感觉体内充满了力量！",
                         "灵体变更为：苍天霸体",
                         "获得被动：信心爆棚（修炼速度小幅提升）",
                     ],
                 )
-            if "霸体" in lingti:
-                return "村长看着你：'霸体已成，去战斗吧！'"
+            
+            # 情况3：其他灵体（比如青龙、朱雀等），村长不忽悠，或者需要道具换体质
+            # 简化逻辑：保留原代码的“四灵血”换体质，或者是直接告知无需更换
+            if "苍天霸体" in lingti: # 兜底
+                return "村长：'去吧，霸体无敌。'"
+            
             has_blood = await inv_get(user_id, "四灵血")
             if has_blood > 0:
                 await inv_add(user_id, "四灵血", -1)
-                await set_player_field(user_id, lingti="苍天霸体")
-                return format_block("霸体觉醒", ["你献上【四灵血】。", "村长为你解开了封印！", "灵体变更为：苍天霸体"])
-            return "村长：'你其实是苍天霸体，去找【四灵血】来，我为你解开封印。'"
+                await set_player_field(user_id, lingti="苍天霸体", confidence_bonus=1)
+                return format_block("霸体觉醒", ["你献上【四灵血】。", "村长为你逆天改命，重塑根基！", "灵体变更为：苍天霸体", "获得被动：信心爆棚"])
+            
+            return f"村长看着你的{lingti}：'资质尚可。但若想成为举世无双的霸体，需寻来【四灵血】，我可为你逆天改命。'"
 
         if target == "药师":
             toxic_points = p[14]
@@ -2195,7 +2225,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
         )
         reward_parts = []
         if coin_gain:
-            reward_parts.append(f"铜钱×{coin_gain}")
+            reward_parts.append(f"大丰币×{coin_gain}")
         if stone_gain:
             reward_parts.append(f"灵石×{stone_gain}")
         return format_block("出售完成", [f"出售：{name}×{qty}", "获得：" + "、".join(reward_parts)])
@@ -2272,7 +2302,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
                 test_drug_ts=now,
             )
             return "药力洗刷全身，你的皮膜更加坚韧了！最大生命+10。"
-        temp = random.choice(["白虎之体", "玄武之体", "朱雀之体"])
+        temp = random.choice(["白虎之体", "玄武之体", "朱雀之体","青龙之体"])
         await set_player_field(
             user_id,
             temp_lingti=temp,
@@ -2337,7 +2367,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
             return "鬼市只会在延康或大墟现身。"
         coin = p[22] if len(p) > 22 else 0
         if coin < GHOST_MARKET_COST:
-            return f"铜钱不足，需要 {GHOST_MARKET_COST}。"
+            return f"大丰币不足，需要 {GHOST_MARKET_COST}。"
         await set_player_field(user_id, coin=coin - GHOST_MARKET_COST)
         roll = random.random()
         if roll < 0.5:
@@ -2633,7 +2663,7 @@ async def handle_cmd(msg: Message, cmd: str, rest: str) -> Optional[str]:
                 "延康任务完成",
                 [
                     f"任务：{mission}",
-                    f"奖励：铜钱×{coin_reward}、灵石×{stone_reward}、修为×{exp_reward}"
+                    f"奖励：大丰币×{coin_reward}、灵石×{stone_reward}、修为×{exp_reward}"
                     + ("、火把×1" if give_torch else ""),
                 ],
                 ["提示：国家任务稳定发薪。"],
@@ -2927,6 +2957,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
