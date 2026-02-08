@@ -1,4 +1,4 @@
-# Mushenji Bot
+# 牧神记MUD
 
 一个基于 `aiogram` 的修仙题材 Telegram 机器人脚本，提供闭关修炼、丹药服用、图鉴、炼制、宗门与任务等玩法，并包含限量物品库存与管理指令。
 
@@ -85,3 +85,11 @@
 
 - 目前玩法为单脚本实现，适合小规模运行。
 - 若需扩展剧情/玩法，可在 `mushenji_bot.py` 中增补物品与规则。
+
+## 新手教程
+
+- https://msj.us.ci
+
+- https://mushen.us.ci
+
+- https://mushenji.us.ci
